@@ -12,9 +12,6 @@ AgentVisibility = Literal["private", "unlisted", "public"]
 AgentCapability = Literal["web", "image", "shell"]
 ConnectorKind = Literal["app", "custom"]
 ProjectKind = Literal["skye", "custom"]
-WebMessageRole = Literal["user", "assistant", "tool", "system"]
-WebFileKind = Literal["upload", "image", "document"]
-ToolStatus = Literal["running", "done"]
 AutomationKind = Literal["schedule", "webhook"]
 
 
@@ -196,16 +193,6 @@ class Memory:
 
 
 @dataclass(frozen=True, slots=True)
-class WebSession:
-    id: str
-    user_id: int
-    display_name: str
-    username: str | None
-    created_at: str
-    expires_at: str
-
-
-@dataclass(frozen=True, slots=True)
 class TelegramProject:
     id: str
     user_id: int
@@ -225,56 +212,6 @@ class TelegramProject:
     @property
     def deletable(self) -> bool:
         return self.kind != "skye"
-
-
-@dataclass(frozen=True, slots=True)
-class WebProject:
-    id: str
-    user_id: int
-    kind: ProjectKind
-    name: str
-    instructions: str
-    icon: str
-    color: str
-    pinned: bool
-    openai_conversation_id: str | None
-    last_message_preview: str
-    last_message_at: str | None
-    created_at: str
-    updated_at: str
-
-
-@dataclass(frozen=True, slots=True)
-class WebMessage:
-    id: str
-    project_id: str
-    user_id: int
-    role: WebMessageRole
-    text: str
-    tool_name: str | None
-    tool_status: ToolStatus | None
-    file_ids: tuple[str, ...]
-    created_at: str
-    tool_args: str | None = None
-    tool_output: str | None = None
-
-
-@dataclass(frozen=True, slots=True)
-class WebFile:
-    id: str
-    user_id: int
-    project_id: str
-    filename: str
-    mime: str
-    size: int
-    kind: WebFileKind
-    created_at: str
-
-
-@dataclass(frozen=True, slots=True)
-class WebSearchHit:
-    project: WebProject
-    message: WebMessage | None = None
 
 
 @dataclass(frozen=True, slots=True)

@@ -4,7 +4,6 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 WWW_ROOT="${WWW_ROOT:-/var/www}"
 SITE_ROOT="$WWW_ROOT/skye-bot.com"
-CHAT_ROOT="$WWW_ROOT/chat.skye-bot.com"
 CADDYFILE="${CADDYFILE:-/etc/caddy/Caddyfile}"
 SHA="${GITHUB_SHA:-manual}"
 STAMP="$(date -u +%Y%m%dT%H%M%SZ)"
@@ -18,11 +17,6 @@ if [[ ! -f .env ]]; then
   exit 1
 fi
 chmod 600 .env
-
-if [[ -f web/package.json ]]; then
-  npm --prefix web ci --no-audit --no-fund
-  npm --prefix web run build
-fi
 
 if ! docker info >/dev/null 2>&1; then
   echo "docker is not running" >&2
@@ -40,11 +34,9 @@ release_into() {
 }
 
 release_into "$ROOT/site" "$SITE_ROOT"
-release_into "$ROOT/web/dist" "$CHAT_ROOT"
 
 if [[ -f "$CADDYFILE" ]]; then
   python3 - "$CADDYFILE" "$WWW_ROOT" \
-    "chat.skye-bot.com=$ROOT/scripts/caddy-chat.skye-bot.com.caddy" \
     "skye-bot.com=$ROOT/scripts/caddy-skye-bot.com.caddy" <<'PY'
 import re
 import sys
@@ -77,14 +69,6 @@ sleep 4
 if ! docker inspect -f '{{.State.Running}}' skye-next | grep -qx true; then
   docker compose logs --tail 80
   echo "skye-next is not running" >&2
-  exit 1
-fi
-
-# The Streamlit beta is mounted at /beta. It is stateless, so a failure here
-# never affects the main app, but fail the deploy loudly rather than silently.
-if ! docker inspect -f '{{.State.Running}}' skye-next-beta | grep -qx true; then
-  docker compose logs --tail 80 skye-beta
-  echo "skye-next-beta is not running" >&2
   exit 1
 fi
 

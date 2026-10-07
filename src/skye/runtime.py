@@ -62,7 +62,6 @@ from .ops_capture import OpsContext, bind_context, clear_context, new_run_id
 from .sandbox import SandboxService, ScopeSandbox, turn_files
 from .sessions import DatabaseSession, without_inline_payloads
 from .skills import SkillService
-from .youtube import YoutubeTranscriptService
 
 log = structlog.get_logger()
 TextCallback = Callable[[str], Awaitable[None]]
@@ -147,7 +146,6 @@ _TOOL_LABELS: dict[str, str] = {
     "update_automation": "Updated an automation",
     "show_webhook_automation": "Showed webhook details",
     "delete_automation": "Deleted an automation",
-    "youtube_get_transcript": "Read YouTube transcript",
 }
 
 
@@ -682,7 +680,6 @@ class AgentRuntime:
         client: AsyncOpenAI | None = None,
         skills: SkillService | None = None,
         automations: AutomationService | None = None,
-        youtube: YoutubeTranscriptService | None = None,
         images: ImageProvider | None = None,
         exa: ExaService | None = None,
         sandbox: SandboxService | None = None,
@@ -697,7 +694,6 @@ class AgentRuntime:
         self.audio = audio
         self.skills = skills
         self.automations = automations
-        self.youtube = youtube
         self.images = images
         self.exa = exa
         self.sandbox = sandbox
@@ -740,8 +736,8 @@ class AgentRuntime:
             max_audio_bytes=self.config.skye_max_attachment_bytes,
         )
         _ = on_text
-        tpt = "web" if key.startswith("web:") else "telegram"
-        label = f"Web project {key[4:]}" if tpt == "web" else f"Chat {context.chat_id}"
+        tpt = "telegram"
+        label = f"Chat {context.chat_id}"
         async with self._locks[key]:
             ops_token = bind_context(
                 OpsContext(
@@ -1193,8 +1189,6 @@ class AgentRuntime:
             tools.extend(self.exa.tools())
         if skills:
             tools.append(self._skill_tool(skills))
-        if self.youtube is not None:
-            tools.append(self.youtube.tool())
         if settings.memory_enabled:
             tools.extend(self.memory.tools(context.scope))
         if manage_automations and self.automations is not None:
@@ -1508,10 +1502,6 @@ def _usage_value(usage: object) -> int | None:
 
 def telegram_run_key(chat_id: int, thread_id: int) -> str:
     return f"tg:{chat_id}:{thread_id}"
-
-
-def web_run_key(project_id: str) -> str:
-    return f"web:{project_id}"
 
 
 def describe_tool_event(

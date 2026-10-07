@@ -25,7 +25,6 @@ from structlog.types import Processor
 from .access import AccessService, ChatAdministrator
 from .attachments import AttachmentService
 from .audio import AudioService
-from .auth import TelegramAuth
 from .automations import AutomationService
 from .billing import BillingService
 from .config import Settings
@@ -43,15 +42,11 @@ from .ops import OpsStore
 from .ops_capture import CapturingTransport
 from .ops_config import describe_fields
 from .ops_logging import OpsLogProcessor
-from .ops_web import OpsPanel
-from .projects import ProjectService
 from .runtime import OPENAI_MAX_RETRIES, AgentRuntime
 from .sandbox import SandboxService
 from .skills import SkillService
 from .telegram import COMMANDS, PRIVATE_COMMANDS, TelegramApp, UpdateMiddleware
 from .telegram_projects import TelegramProjectService
-from .web import WebApp, serve_web
-from .youtube import YoutubeTranscriptService
 
 log = structlog.get_logger()
 
@@ -207,10 +202,6 @@ async def run() -> None:
     billing = BillingService(database, config.telegram_bot_token)
     skills = SkillService(database, config.skye_max_attachment_bytes)
     automations = AutomationService(database, config.skye_web_origin)
-    youtube = YoutubeTranscriptService(
-        max_chars=config.skye_youtube_transcript_max_chars,
-        proxy_url=config.skye_youtube_proxy_url,
-    )
     exa = ExaService(config.skye_exa_api_key) if config.skye_exa_api_key else None
     sandbox = (
         SandboxService(
@@ -238,19 +229,12 @@ async def run() -> None:
         client,
         skills,
         automations,
-        youtube,
         images,
         exa,
         sandbox,
         audio=audio,
     )
-    projects = ProjectService(
-        database,
-        config.skye_web_files_path,
-    )
     telegram_projects = TelegramProjectService(database)
-    auth = TelegramAuth(config, database, projects)
-    ops = OpsPanel(config, database, store, auth) if config.skye_ops_enabled else None
     telegram = TelegramApp(
         config,
         bot,
@@ -268,18 +252,6 @@ async def run() -> None:
         telegram_projects,
         billing,
         automations,
-    )
-    web_app = WebApp(
-        config,
-        database,
-        access,
-        runtime,
-        projects,
-        auth,
-        audio,
-        automations,
-        telegram.enqueue_automation,
-        ops,
     )
     dispatcher.update.outer_middleware(UpdateMiddleware(database, groups, media_groups))
     dispatcher.include_router(telegram.router)
@@ -299,7 +271,6 @@ async def run() -> None:
         if dropped:
             log.info("pending_updates_dropped", count=dropped)
         await bot.delete_webhook(drop_pending_updates=True)
-        runner = await serve_web(web_app)
         scheduler = asyncio.create_task(
             automations.run_loop(telegram.fire_automation, runtime.busy)
         )
@@ -338,7 +309,6 @@ async def run() -> None:
             if janitor is not None:
                 with contextlib.suppress(asyncio.CancelledError):
                     await janitor
-            await runner.cleanup()
     finally:
         await connectors.aclose()
         await client.close()

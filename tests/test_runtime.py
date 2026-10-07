@@ -46,7 +46,6 @@ from skye.runtime import (
     retry_after,
 )
 from skye.sandbox import SandboxResult, SandboxService
-from skye.youtube import YoutubeTranscriptService
 
 
 def test_send_voice_tool_events_are_private_delivery_activity() -> None:
@@ -99,25 +98,6 @@ def test_agent_toolset_without_optional_services_is_delivery_plus_memory() -> No
         "remember",
         "recall",
         "forget",
-    ]
-
-
-def test_agent_includes_youtube_transcript_tool_when_configured() -> None:
-    memory = MemoryService(cast(Any, None))
-    runtime = AgentRuntime(
-        config(),
-        cast(Any, None),
-        memory,
-        "You are Skye.",
-        youtube=YoutubeTranscriptService(),
-    )
-    agent = runtime._agent(
-        RequestContext(1, "private", 1),
-        ChatSettings("gpt-5.6-luna", "medium"),
-    )
-
-    assert "youtube_get_transcript" in [
-        cast(FunctionTool, tool).name for tool in agent.tools if isinstance(tool, FunctionTool)
     ]
 
 

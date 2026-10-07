@@ -123,8 +123,6 @@ class Settings(BaseSettings):
     skye_fal_image_edit_model: str = "openai/gpt-image-2.5/flare/edit"
     skye_fal_speech_model: str = "google/gemini-3.8-flash-lite-tts"
     skye_fal_transcription_model: str = "fal-ai/elevenlabs/speech-to-text/scribe-v2"
-    skye_youtube_transcript_max_chars: int = Field(default=48_000, ge=1_000, le=200_000)
-    skye_youtube_proxy_url: str | None = None
     skye_media_group_settle_seconds: float = Field(default=0.75, ge=0.1, le=5.0)
     skye_group_context_messages: int = Field(default=20, ge=1, le=100)
     skye_group_context_message_chars: int = Field(default=1_500, ge=100, le=4_096)
@@ -132,10 +130,9 @@ class Settings(BaseSettings):
     skye_sandbox_allowed_domains: SandboxDomains = Field(default=SANDBOX_DOMAINS, min_length=1)
     skye_proxy_url: str | None = None
     skye_tracing: bool = False
-    # Operator panel. Owner-only; the API answers 404 for everyone else when
-    # disabled. Payload capture is on by default because that is the point of
-    # the panel, but it stores prompts, memories and file bodies verbatim.
-    skye_ops_enabled: bool = True
+    # Operator observability. Payload capture stores full model requests and
+    # responses, including prompts, memories and file bodies, so keep retention
+    # short and media on the data volume.
     skye_ops_capture_payloads: bool = True
     skye_ops_capture_media: bool = True
     skye_ops_media_path: Path = Path("data/ops/media")
@@ -144,12 +141,8 @@ class Settings(BaseSettings):
     skye_ops_trace_retention_days: int = Field(default=14, ge=1, le=365)
     skye_ops_trace_max_rows: int = Field(default=2_000, ge=10)
     skye_ops_max_body_bytes: int = Field(default=2_000_000, ge=10_000)
+    # Public origin used to build webhook automation URLs.
     skye_web_origin: str | None = None
-    skye_web_host: str = "127.0.0.1"
-    skye_web_port: int = Field(default=8080, ge=1, le=65535)
-    skye_web_files_path: Path = Path("data/web")
-    telegram_login_client_id: str | None = None
-    telegram_login_client_secret: str | None = None
 
     @field_validator("skye_group_context_total_chars")
     @classmethod
@@ -208,7 +201,6 @@ class Settings(BaseSettings):
         "skye_image_base_url",
         "skye_audio_api_key",
         "skye_audio_base_url",
-        "skye_youtube_proxy_url",
         "skye_proxy_url",
         "skye_provider_base_url",
         mode="before",
@@ -285,23 +277,10 @@ class Settings(BaseSettings):
             raise RuntimeError("No fal.ai API key is configured")
         return key
 
-    @field_validator(
-        "skye_web_origin",
-        "telegram_login_client_id",
-        "telegram_login_client_secret",
-        mode="before",
-    )
+    @field_validator("skye_web_origin", mode="before")
     @classmethod
-    def _empty_web(cls, value: object) -> object:
+    def _empty_web_origin(cls, value: object) -> object:
         return _clean_secret(value)
-
-    @property
-    def web_enabled(self) -> bool:
-        return bool(
-            self.skye_web_origin
-            and self.telegram_login_client_id
-            and self.telegram_login_client_secret
-        )
 
 
 def _clean_secret(value: object) -> object:

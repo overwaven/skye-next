@@ -1,16 +1,12 @@
 from datetime import UTC, datetime
 from pathlib import Path
 from types import SimpleNamespace
-from typing import Any, cast
+from typing import Any
 from unittest.mock import AsyncMock
 
 import pytest
 from aiogram.types import Chat, Message, User
-from aiohttp.test_utils import TestClient, TestServer
 
-from skye.access import AccessService
-from skye.audio import AudioService
-from skye.auth import TelegramAuth
 from skye.automations import (
     AutomationError,
     AutomationPanel,
@@ -20,28 +16,11 @@ from skye.automations import (
     parse_cron,
     sanitize_webhook_body,
 )
-from skye.config import Settings
 from skye.db import Database
 from skye.models import RequestContext, Scope
-from skye.projects import ProjectService
 from skye.rich import RichMessages
 from skye.runtime import AgentRuntime, RunOutput
 from skye.telegram import TelegramApp
-from skye.web import WebApp
-
-
-def settings(**overrides: object) -> Settings:
-    values: dict[str, object] = {
-        "telegram_bot_token": "123:token",
-        "openai_api_key": "sk-test",
-        "skye_owner_ids": "1",
-        "skye_web_origin": "https://chat.skye-bot.com",
-        "telegram_login_client_id": "99",
-        "telegram_login_client_secret": "login-secret",
-        "_env_file": None,
-    }
-    values.update(overrides)
-    return Settings(**values)  # type: ignore[arg-type]
 
 
 @pytest.fixture
@@ -482,72 +461,6 @@ class FakeRuntime(AgentRuntime):
 
     def busy(self, chat_id: int, thread_id: int) -> bool:
         return False
-
-
-async def _web_client(
-    database: Database, tmp_path: Path, automations: AutomationService
-) -> tuple[TestClient, list[tuple[Any, str]]]:
-    fired: list[tuple[Any, str]] = []
-
-    def fire(item: Any, body: str) -> None:
-        fired.append((item, body))
-
-    config = settings()
-    projects = ProjectService(database, tmp_path / "web-files")
-    auth = TelegramAuth(config, database, projects)
-    web_app = WebApp(
-        config,
-        database,
-        AccessService(database, frozenset({1})),
-        FakeRuntime(),  # type: ignore[arg-type]
-        projects,
-        auth,
-        AudioService.from_settings(config, client=cast(Any, AsyncMock())),
-        automations,
-        fire,
-    )
-    client = TestClient(TestServer(web_app.app))
-    await client.start_server()
-    return client, fired
-
-
-@pytest.mark.asyncio
-async def test_webhook_auth_success_and_failure(
-    database: Database, automations: AutomationService, tmp_path: Path
-) -> None:
-    item = await automations.create_webhook(
-        private_context(1), name="Hook", task="Handle the event."
-    )
-    client, fired = await _web_client(database, tmp_path, automations)
-    try:
-        missing = await client.post(f"/automations/{item.id}/hook", data=b'{"ok":true}')
-        assert missing.status == 401
-
-        wrong = await client.post(
-            f"/automations/{item.id}/hook",
-            data=b'{"ok":true}',
-            headers={"Authorization": "Bearer wrong"},
-        )
-        assert wrong.status == 401
-
-        unknown = await client.post(
-            "/automations/missing/hook",
-            data=b"{}",
-            headers={"Authorization": item.webhook_authorization or ""},
-        )
-        assert unknown.status == 404
-
-        ok = await client.post(
-            f"/automations/{item.id}/hook",
-            data=b'{"ok":true}',
-            headers={"Authorization": item.webhook_authorization or ""},
-        )
-        assert ok.status == 202
-        assert len(fired) == 1
-        assert fired[0][0].id == item.id
-        assert fired[0][1] == '{"ok":true}'
-    finally:
-        await client.close()
 
 
 async def test_fire_uses_runtime_and_created_by() -> None:

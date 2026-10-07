@@ -8,7 +8,6 @@ from aiogram.types import Chat, Message, User
 
 from skye.db import Database
 from skye.models import RequestContext, TelegramProject
-from skye.projects import ProjectService
 from skye.telegram import CATCHUP_PROMPT, TelegramApp
 from skye.telegram_projects import (
     DEFAULT_EMOJI,
@@ -120,22 +119,6 @@ async def test_selecting_a_project_changes_the_active_conversation(
     selected = await projects.select(1, skye.id)
     assert (await projects.active(1)).id == selected.id
     assert await projects.conversation_id(await projects.active(1)) == skye_id
-
-
-async def test_web_and_telegram_conversation_ids_never_match(
-    database: Database, tmp_path: Path
-) -> None:
-    telegram = service(database)
-    web = ProjectService(database, tmp_path / "web")
-    telegram_project = await telegram.create(1, name="Notes", emoji="📁")
-    web_project = await web.create(1, name="Notes")
-
-    telegram_id = await telegram.conversation_id(telegram_project)
-    web_id = await web.conversation_id(web_project)
-
-    assert telegram_id != web_id
-    assert telegram_id == f"telegram-project:{telegram_project.id}"
-    assert web_id == f"web-project:{web_project.id}"
 
 
 async def test_delete_active_falls_back_to_skye(database: Database) -> None:

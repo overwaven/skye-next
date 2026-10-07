@@ -1,8 +1,8 @@
 """Operator config: describe :class:`Settings`, validate edits, and apply overrides.
 
-The panel is a thin, typed surface over the process environment. Every editable
-field maps to one ``Settings`` field and one environment variable, so the panel
-never invents configuration the runtime does not already understand.
+Every editable field maps to one ``Settings`` field and one environment
+variable, so nothing here invents configuration the runtime does not already
+understand.
 """
 
 from __future__ import annotations
@@ -31,7 +31,6 @@ FieldKind = Literal[
 GROUPS: tuple[str, ...] = (
     "Model provider",
     "Telegram",
-    "Web chat",
     "Runtime",
     "Groups",
     "Media",
@@ -65,12 +64,6 @@ FIELD_GROUPS: dict[str, str] = {
     "composio_api_key": "Model provider",
     "telegram_bot_token": "Telegram",
     "skye_owner_ids": "Telegram",
-    "skye_web_origin": "Web chat",
-    "skye_web_host": "Web chat",
-    "skye_web_port": "Web chat",
-    "skye_web_files_path": "Web chat",
-    "telegram_login_client_id": "Web chat",
-    "telegram_login_client_secret": "Web chat",
     "skye_max_turns": "Runtime",
     "skye_run_timeout_seconds": "Runtime",
     "skye_compaction_threshold_tokens": "Runtime",
@@ -84,8 +77,6 @@ FIELD_GROUPS: dict[str, str] = {
     "skye_group_context_total_chars": "Groups",
     "skye_media_group_settle_seconds": "Groups",
     "skye_native_media": "Media",
-    "skye_youtube_transcript_max_chars": "Media",
-    "skye_youtube_proxy_url": "Media",
     "skye_sandbox_enabled": "Sandbox",
     "skye_sandbox_image": "Sandbox",
     "skye_sandbox_timeout_seconds": "Sandbox",
@@ -97,7 +88,6 @@ FIELD_GROUPS: dict[str, str] = {
     "skye_sandbox_total_bytes": "Sandbox",
     "skye_sandbox_max_concurrent": "Sandbox",
     "skye_sandbox_allowed_domains": "Sandbox",
-    "skye_ops_enabled": "Observability",
     "skye_ops_capture_payloads": "Observability",
     "skye_ops_capture_media": "Observability",
     "skye_ops_media_path": "Observability",
@@ -107,6 +97,7 @@ FIELD_GROUPS: dict[str, str] = {
     "skye_ops_trace_max_rows": "Observability",
     "skye_ops_max_body_bytes": "Observability",
     "skye_tracing": "Observability",
+    "skye_web_origin": "Advanced",
     "skye_database_path": "Advanced",
     "skye_base_prompt_path": "Advanced",
     "skye_proxy_url": "Advanced",
@@ -138,11 +129,6 @@ FIELD_LABELS: dict[str, str] = {
     "telegram_bot_token": "Bot token",
     "skye_owner_ids": "Owner user ids",
     "skye_web_origin": "Public origin",
-    "skye_web_host": "Listen host",
-    "skye_web_port": "Listen port",
-    "skye_web_files_path": "Web files path",
-    "telegram_login_client_id": "Telegram login client id",
-    "telegram_login_client_secret": "Telegram login client secret",
     "skye_max_turns": "Max turns per run",
     "skye_run_timeout_seconds": "Run timeout",
     "skye_compaction_threshold_tokens": "Compaction threshold",
@@ -156,8 +142,6 @@ FIELD_LABELS: dict[str, str] = {
     "skye_group_context_total_chars": "Group context total chars",
     "skye_media_group_settle_seconds": "Media group settle time",
     "skye_native_media": "Native media inputs",
-    "skye_youtube_transcript_max_chars": "YouTube transcript cap",
-    "skye_youtube_proxy_url": "YouTube proxy URL",
     "skye_sandbox_enabled": "Sandbox enabled",
     "skye_sandbox_image": "Sandbox image",
     "skye_sandbox_timeout_seconds": "Sandbox timeout",
@@ -169,7 +153,6 @@ FIELD_LABELS: dict[str, str] = {
     "skye_sandbox_total_bytes": "Bytes across workspaces",
     "skye_sandbox_max_concurrent": "Sandbox concurrency",
     "skye_sandbox_allowed_domains": "Reserved egress domains",
-    "skye_ops_enabled": "Panel enabled",
     "skye_ops_capture_payloads": "Capture model payloads",
     "skye_ops_capture_media": "Capture images and files",
     "skye_ops_media_path": "Captured media path",
@@ -209,12 +192,7 @@ FIELD_DESCRIPTIONS: dict[str, str] = {
     "composio_api_key": "Enables hosted app connectors through Composio.",
     "telegram_bot_token": "From BotFather. Required to start polling.",
     "skye_owner_ids": "Telegram user ids that bypass access rules and see this panel.",
-    "skye_web_origin": "Public origin for Telegram login redirects and cookies.",
-    "skye_web_host": "Interface the web server binds to.",
-    "skye_web_port": "Port the web server listens on.",
-    "skye_web_files_path": "Data directory for uploads and generated files.",
-    "telegram_login_client_id": "From BotFather, for the Login Widget.",
-    "telegram_login_client_secret": "From BotFather, for the Login Widget.",
+    "skye_web_origin": "Public origin used to build webhook automation URLs.",
     "skye_max_turns": "Upper bound on model turns inside one run.",
     "skye_run_timeout_seconds": "Wall-clock limit for a single run.",
     "skye_compaction_threshold_tokens": "Trim history past this estimate.",
@@ -228,8 +206,6 @@ FIELD_DESCRIPTIONS: dict[str, str] = {
     "skye_group_context_total_chars": "Total group context cap. Must exceed the per-message cap.",
     "skye_media_group_settle_seconds": "Quiet window before a photo album is processed.",
     "skye_native_media": "Send raw audio and documents instead of transcribing and extracting.",
-    "skye_youtube_transcript_max_chars": "Character cap for YouTube transcripts.",
-    "skye_youtube_proxy_url": "Optional proxy for YouTube. Cloud IPs are often blocked.",
     "skye_sandbox_enabled": "Runs shell_exec, python, read_file and write_file in Docker.",
     "skye_sandbox_image": "Docker image used for one-off sandbox commands.",
     "skye_sandbox_timeout_seconds": "Per-command time limit.",
@@ -241,7 +217,6 @@ FIELD_DESCRIPTIONS: dict[str, str] = {
     "skye_sandbox_total_bytes": "Storage cap across all scopes in bytes.",
     "skye_sandbox_max_concurrent": "Sandbox commands allowed at once.",
     "skye_sandbox_allowed_domains": "Reserved for sandbox egress filtering.",
-    "skye_ops_enabled": "Serve the operator panel and its API to owner accounts.",
     "skye_ops_capture_payloads": "Store full model requests and responses.",
     "skye_ops_capture_media": "Store images and files seen in captured requests and responses.",
     "skye_ops_media_path": "Directory for captured media. Keep it on the data volume.",
@@ -263,8 +238,6 @@ ADVANCED_FIELDS: frozenset[str] = frozenset(
         "skye_max_output_tokens",
         "skye_tpm_budget",
         "skye_native_media",
-        "skye_youtube_transcript_max_chars",
-        "skye_youtube_proxy_url",
         "skye_media_group_settle_seconds",
         "skye_sandbox_volume",
         "skye_sandbox_work_dir",
@@ -279,7 +252,7 @@ ADVANCED_FIELDS: frozenset[str] = frozenset(
     }
 )
 
-READ_ONLY_FIELDS: frozenset[str] = frozenset({"skye_database_path", "skye_web_files_path"})
+READ_ONLY_FIELDS: frozenset[str] = frozenset({"skye_database_path"})
 
 _SECRET_MARKERS = ("key", "token", "secret", "password", "authorization")
 
