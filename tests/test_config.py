@@ -163,16 +163,32 @@ def test_native_media_is_off_by_default() -> None:
     assert settings(skye_native_media=True).skye_native_media is True
 
 
-def test_fal_media_is_selected_by_the_key_or_explicitly() -> None:
-    assert settings().fal_enabled is False
-    assert settings(skye_fal_key="fal-test").fal_enabled is True
-    assert settings(skye_fal_key="fal-test", skye_media_provider="compatible").fal_enabled is False
-    assert settings(skye_fal_key="fal-test", skye_media_provider="fal").fal_enabled is True
+def test_fal_media_is_selected_per_capability() -> None:
+    # Without a key nothing goes to fal.
+    plain = settings()
+    assert plain.images_on_fal is False
+    assert plain.audio_on_fal is False
+
+    # With a key, ``auto`` sends both to fal.
+    auto = settings(skye_fal_key="fal-test")
+    assert auto.images_on_fal is True
+    assert auto.audio_on_fal is True
+
+    # Capabilities can be split: images on the chat provider, speech on fal.
+    split = settings(
+        skye_fal_key="fal-test",
+        skye_image_provider="compatible",
+        skye_audio_provider="fal",
+    )
+    assert split.images_on_fal is False
+    assert split.audio_on_fal is True
 
 
 def test_fal_provider_requires_a_key() -> None:
     with pytest.raises(ValidationError):
-        settings(skye_media_provider="fal")
+        settings(skye_image_provider="fal")
+    with pytest.raises(ValidationError):
+        settings(skye_audio_provider="fal")
 
 
 def test_fal_media_defaults_are_the_requested_endpoints() -> None:

@@ -114,11 +114,13 @@ class Settings(BaseSettings):
     skye_image_base_url: str | None = None
     skye_audio_api_key: str | None = None
     skye_audio_base_url: str | None = None
-    # Pictures and speech can run directly on fal.ai instead of the chat
-    # provider. ``auto`` picks fal whenever a FAL key is present; the model ids
-    # below are fal endpoints, so no other setting has to change to switch.
+    # Pictures and speech are picked separately. ``auto`` uses fal whenever a
+    # FAL key is present, else the compatible endpoint. Set ``compatible`` to
+    # keep a capability on the chat provider (for example images on Selectel)
+    # while the other runs on fal.
     skye_fal_key: str | None = None
-    skye_media_provider: Literal["auto", "compatible", "fal"] = "auto"
+    skye_image_provider: Literal["auto", "compatible", "fal"] = "auto"
+    skye_audio_provider: Literal["auto", "compatible", "fal"] = "auto"
     skye_fal_image_model: str = "openai/gpt-image-2.5/flare/text-to-image"
     skye_fal_image_edit_model: str = "openai/gpt-image-2.5/flare/edit"
     skye_fal_speech_model: str = "google/gemini-3.8-flash-lite-tts"
@@ -222,8 +224,10 @@ class Settings(BaseSettings):
             raise ValueError(msg)
         if not self.skye_default_model.strip():
             raise ValueError("SKYE_DEFAULT_MODEL must not be empty")
-        if self.skye_media_provider == "fal" and not self.skye_fal_key:
-            raise ValueError("SKYE_FAL_KEY is required when SKYE_MEDIA_PROVIDER is fal")
+        if self.skye_image_provider == "fal" and not self.skye_fal_key:
+            raise ValueError("SKYE_FAL_KEY is required when SKYE_IMAGE_PROVIDER is fal")
+        if self.skye_audio_provider == "fal" and not self.skye_fal_key:
+            raise ValueError("SKYE_FAL_KEY is required when SKYE_AUDIO_PROVIDER is fal")
         return self
 
     @property
@@ -266,10 +270,17 @@ class Settings(BaseSettings):
         return bool(self.skye_audio_api_key or self.skye_audio_base_url)
 
     @property
-    def fal_enabled(self) -> bool:
-        if self.skye_media_provider == "fal":
+    def images_on_fal(self) -> bool:
+        return self._picks_fal(self.skye_image_provider)
+
+    @property
+    def audio_on_fal(self) -> bool:
+        return self._picks_fal(self.skye_audio_provider)
+
+    def _picks_fal(self, provider: str) -> bool:
+        if provider == "fal":
             return True
-        if self.skye_media_provider == "compatible":
+        if provider == "compatible":
             return False
         return bool(self.skye_fal_key)
 

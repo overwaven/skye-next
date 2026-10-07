@@ -109,23 +109,29 @@ async def run() -> None:
         max_retries=OPENAI_MAX_RETRIES,
         http_client=http_client,
     )
-    # Pictures and audio run either on fal.ai directly or on separate
-    # OpenAI-compatible endpoints (e.g. a chat gateway without Images or audio
-    # APIs). Without overrides the compatible clients reuse the chat client.
+    # Pictures and audio are chosen separately: either on fal.ai directly or on
+    # separate OpenAI-compatible endpoints (e.g. a chat gateway). Without
+    # overrides the compatible clients reuse the chat client.
     image_client: AsyncOpenAI | None = None
     audio_client: AsyncOpenAI | None = None
+    fal_client: FalClient | None = None
+
+    def fal() -> FalClient:
+        nonlocal fal_client
+        if fal_client is None:
+            fal_client = FalClient(
+                config.fal_key, timeout_seconds=float(config.skye_run_timeout_seconds)
+            )
+        return fal_client
+
     images: ImageProvider
-    if config.fal_enabled:
-        fal = FalClient(
-            config.fal_key, timeout_seconds=float(config.skye_run_timeout_seconds)
-        )
+    if config.images_on_fal:
         images = FalImageService(
-            fal,
+            fal(),
             config.skye_fal_image_model,
             config.skye_fal_image_edit_model,
             config.skye_max_attachment_bytes,
         )
-        audio = AudioService.from_settings(config, fal=fal)
     else:
         image_client = (
             AsyncOpenAI(
@@ -137,6 +143,14 @@ async def run() -> None:
             if config.image_endpoint_overridden
             else client
         )
+        images = ImageService(
+            image_client, config.skye_image_model, config.skye_max_attachment_bytes
+        )
+
+    audio: AudioService
+    if config.audio_on_fal:
+        audio = AudioService.from_settings(config, fal=fal())
+    else:
         audio_client = (
             AsyncOpenAI(
                 api_key=config.audio_api_key,
@@ -147,15 +161,13 @@ async def run() -> None:
             if config.audio_endpoint_overridden
             else client
         )
-        images = ImageService(
-            image_client, config.skye_image_model, config.skye_max_attachment_bytes
-        )
         audio = AudioService.from_settings(config, client=audio_client)
     log.info(
         "media_endpoints",
-        provider="fal" if config.fal_enabled else "compatible",
-        image_override=config.image_endpoint_overridden and not config.fal_enabled,
-        audio_override=config.audio_endpoint_overridden and not config.fal_enabled,
+        images="fal" if config.images_on_fal else "compatible",
+        audio="fal" if config.audio_on_fal else "compatible",
+        image_override=config.image_endpoint_overridden and not config.images_on_fal,
+        audio_override=config.audio_endpoint_overridden and not config.audio_on_fal,
     )
     set_default_openai_client(client, use_for_tracing=False)
     set_tracing_disabled(True)
