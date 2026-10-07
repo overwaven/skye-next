@@ -41,3 +41,10 @@ def test_any_work_costs_at_least_one_milli_spark() -> None:
     tiny = TurnUsage(model="deepseek/deepseek-v4.1-flash", input_tokens=1)
     assert pricing.milli(tiny) == 1
     assert pricing.milli(TurnUsage()) == 0
+
+
+def test_connector_calls_are_priced_flat() -> None:
+    pricing = PricingService(connector_price_rub=0.5, sparks_per_rub=2.0)
+    usage = TurnUsage(connector_calls=3)
+    assert pricing.cost_rub(usage) == 1.5
+    assert pricing.sparks(usage) == 3.0

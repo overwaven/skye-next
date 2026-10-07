@@ -1,8 +1,7 @@
 from collections.abc import Sequence
-from typing import Any, cast
+from typing import Any
 
 import pytest
-from agents import HostedMCPTool, ToolSearchTool
 
 from skye.connectors import (
     ConnectorError,
@@ -11,6 +10,7 @@ from skye.connectors import (
     composio_user_key,
     mcp_label,
     parse_headers,
+    public_tool_name,
     validate_mcp_url,
 )
 from skye.db import Database
@@ -168,21 +168,22 @@ async def test_oauth_disconnect_deletes_only_that_users_account(database: Databa
     assert composio.accounts == []
 
 
-async def test_hosted_tools_are_private_only(database: Database) -> None:
+async def test_connections_are_private_only(database: Database) -> None:
     composio = FakeComposio()
     composio.accounts = [AppConnector("gmail", "Gmail", "connected", account_id="ca_1")]
     service = ConnectorService(database, composio)
     await service.add_custom(4, "CRM", "https://example.com/mcp", {"Authorization": "Bearer x"})
 
-    private = await service.hosted_tools(RequestContext(4, "private", 4))
-    group = await service.hosted_tools(RequestContext(-100, "supergroup", 4))
+    private = await service.connections(RequestContext(4, "private", 4))
+    group = await service.connections(RequestContext(-100, "supergroup", 4))
 
-    assert group.tools == ()
+    assert group.connections == ()
     assert private.labels == ("Gmail", "CRM")
-    assert [type(tool) for tool in private.tools] == [HostedMCPTool, HostedMCPTool, ToolSearchTool]
-    custom = cast(HostedMCPTool, private.tools[1])
-    assert custom.tool_config["headers"] == {"Authorization": "Bearer x"}
-    assert custom.tool_config["server_url"] == "https://example.com/mcp"
+    assert private.connections[0].label == "composio"
+    custom = private.connections[1]
+    assert custom.headers == {"Authorization": "Bearer x"}
+    assert custom.url == "https://example.com/mcp"
+    assert custom.label.startswith("mcp_")
     assert composio.sessions == [("tg:4", ("gmail",))]
     assert composio.last_accounts == {"gmail": "ca_1"}
 
@@ -194,10 +195,16 @@ async def test_failed_composio_session_does_not_claim_apps(database: Database) -
     service = ConnectorService(database, composio)
     await service.add_custom(5, "CRM", "https://example.com/mcp", {})
 
-    tools = await service.hosted_tools(RequestContext(5, "private", 5))
+    pending = await service.connections(RequestContext(5, "private", 5))
 
-    assert tools.labels == ("CRM",)
-    assert [type(tool) for tool in tools.tools] == [HostedMCPTool, ToolSearchTool]
+    assert pending.labels == ("CRM",)
+    assert len(pending.connections) == 1
+    assert pending.connections[0].url == "https://example.com/mcp"
+
+
+def test_public_tool_name_is_sanitized_and_bounded() -> None:
+    assert public_tool_name("cmp_4", "send email") == "cmp_4__send_email"
+    assert len(public_tool_name("x" * 80, "y" * 80)) <= 64
 
 
 def test_settings_keyboard_adds_connectors_in_private() -> None:
@@ -285,13 +292,13 @@ async def test_group_tools_use_only_shared_connectors(database: Database) -> Non
     await service.add_custom(4, "CRM", "https://example.com/mcp", {"Authorization": "Bearer x"})
     await service.share(4, "Alice", -100, "app", "github")
 
-    private = await service.hosted_tools(RequestContext(4, "private", 4))
-    group = await service.hosted_tools(RequestContext(-100, "supergroup", 4))
-    other = await service.hosted_tools(RequestContext(-200, "supergroup", 4))
+    private = await service.connections(RequestContext(4, "private", 4))
+    group = await service.connections(RequestContext(-100, "supergroup", 4))
+    other = await service.connections(RequestContext(-200, "supergroup", 4))
 
     assert "Gmail" in private.labels and "CRM" in private.labels
     assert group.labels == ("GitHub (shared by Alice)",)
-    assert other.tools == ()
+    assert other.connections == ()
     assert ("tg:4", ("github",)) in composio.sessions
     assert composio.last_accounts == {"github": "ca_2"}
 
@@ -309,7 +316,7 @@ async def test_disconnect_and_delete_revoke_shares(database: Database) -> None:
     await service.delete_custom(4, custom.id)
 
     assert await service.group_shares(-100) == []
-    assert (await service.hosted_tools(RequestContext(-100, "supergroup", 4))).tools == ()
+    assert (await service.connections(RequestContext(-100, "supergroup", 4))).connections == ()
 
 
 async def test_disabled_or_missing_share_is_not_attached(database: Database) -> None:
@@ -320,10 +327,10 @@ async def test_disabled_or_missing_share_is_not_attached(database: Database) -> 
     await service.update_custom(4, custom.id, enabled=False)
 
     shares = await service.group_shares(-100)
-    tools = await service.hosted_tools(RequestContext(-100, "supergroup", 4))
+    pending = await service.connections(RequestContext(-100, "supergroup", 4))
 
     assert shares[0].available is False
-    assert tools.tools == ()
+    assert pending.connections == ()
 
 
 async def test_shareable_groups_only_include_groups_the_user_wrote_in(

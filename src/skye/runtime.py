@@ -11,7 +11,7 @@ import time
 import zipfile
 from collections import defaultdict, deque
 from collections.abc import AsyncIterator, Awaitable, Callable
-from contextlib import asynccontextmanager, suppress
+from contextlib import AsyncExitStack, asynccontextmanager, suppress
 from dataclasses import dataclass, field, replace
 from typing import Any, cast
 
@@ -51,7 +51,7 @@ from .audio import AudioService
 from .automations import AutomationService
 from .citations import sanitize_citations, url_citations
 from .config import Settings
-from .connectors import ConnectorService
+from .connectors import ConnectorService, ConnectorSession
 from .conversations import ConversationService
 from .custom_agents import AGENT_CAPABILITIES, AgentComposition, CustomAgentService
 from .exa import ExaService
@@ -755,6 +755,8 @@ class AgentRuntime:
             active = _ActiveRun()
             self._active[key] = active
             turn_sandbox: ScopeSandbox | None = None
+            connector_stack = AsyncExitStack()
+            connector_session: ConnectorSession | None = None
             try:
                 if active.cancel.is_set():
                     raise asyncio.CancelledError
@@ -772,15 +774,17 @@ class AgentRuntime:
                     composition = await self.custom_agents.composition(
                         context.scope, settings.active_agent_id
                     )
-                # Connected apps stay configured but detached: Chat Completions
-                # cannot run HostedMCP/ToolSearch tools, the MCP bridge is next.
+                # Connected apps attach through a local MCP bridge: their tools
+                # become ordinary function tools the Chat Completions model can
+                # call, kept open for the duration of the run.
                 if self.connectors is not None:
-                    pending = await self.connectors.hosted_tools(context)
-                    if pending.tools:
-                        log.info(
-                            "connectors_detached_for_chat_completions",
-                            tools=len(pending.tools),
-                        )
+                    connector_session = await connector_stack.enter_async_context(
+                        self.connectors.open(context)
+                    )
+                connector_tools = () if connector_session is None else connector_session.tools
+                connector_labels = (
+                    () if connector_session is None else connector_session.labels
+                )
                 skills: tuple[Skill, ...] = ()
                 if self.skills is not None:
                     skills = await self.skills.mounted(context.scope)
@@ -821,6 +825,8 @@ class AgentRuntime:
                     image_tool_calls=image_tool_call_limit(user_input),
                     turn_images=turn_images,
                     turn_sandbox=turn_sandbox,
+                    connector_tools=connector_tools,
+                    connector_labels=connector_labels,
                 )
                 async with self._provider_slot(active, context, key):
                     if active.cancel.is_set():
@@ -847,8 +853,15 @@ class AgentRuntime:
                             (*output.files, *auto_files, *delivery.files),
                             output.usage_tokens,
                             delivery.sent,
+                            usage=replace(
+                                output.usage,
+                                connector_calls=(
+                                    connector_session.calls if connector_session else 0
+                                ),
+                            ),
                         )
             finally:
+                await connector_stack.aclose()
                 clear_context(ops_token)
                 self._active.pop(key, None)
                 if turn_sandbox is not None:
@@ -1164,6 +1177,8 @@ class AgentRuntime:
         image_tool_calls: int | None = None,
         turn_images: TurnImages | None = None,
         turn_sandbox: ScopeSandbox | None = None,
+        connector_tools: tuple[Tool, ...] = (),
+        connector_labels: tuple[str, ...] = (),
     ) -> Agent[None]:
         composition = composition or AgentComposition(None, ())
         delivery = delivery or TurnDelivery()
@@ -1174,7 +1189,7 @@ class AgentRuntime:
             settings,
             memory_context,
             active,
-            (),
+            connector_labels,
             capabilities,
             skills,
             extra_instructions,
@@ -1194,6 +1209,7 @@ class AgentRuntime:
             tools.extend(self.exa.tools())
         if skills:
             tools.append(self._skill_tool(skills))
+        tools.extend(connector_tools)
         if settings.memory_enabled:
             tools.extend(self.memory.tools(context.scope))
         if manage_automations and self.automations is not None:
@@ -1208,6 +1224,7 @@ class AgentRuntime:
                 image_tool_calls=image_tool_calls,
                 turn_images=turn_images,
                 turn_sandbox=turn_sandbox,
+                connector_tools=connector_tools,
             ).as_tool(
                 tool_name=f"agent_{item.profile.id}",
                 tool_description=(
@@ -1271,7 +1288,11 @@ class AgentRuntime:
                 "filtering the content. Use recall when needed and forget when asked."
             )
         if connector_labels:
-            _ = connector_labels
+            listed = ", ".join(connector_labels)
+            instructions += (
+                f"\n\nConnected apps: {listed}. Their tools are available as functions; "
+                "call them to act in those apps on the user's behalf."
+            )
         if "image" in capabilities:
             instructions += (
                 "\n\nCall generate_image for new pictures and edit_image to change a photo "
@@ -1355,6 +1376,7 @@ class AgentRuntime:
         image_tool_calls: int | None = None,
         turn_images: TurnImages | None = None,
         turn_sandbox: ScopeSandbox | None = None,
+        connector_tools: tuple[Tool, ...] = (),
     ) -> Agent[None]:
         instructions = self._instructions(
             context,
@@ -1371,6 +1393,7 @@ class AgentRuntime:
             tools.extend(turn_images.tools())
         if self.exa is not None and "web" in installed.version.capabilities:
             tools.extend(self.exa.tools())
+        tools.extend(connector_tools)
         return Agent(
             name=installed.version.name,
             instructions=instructions,

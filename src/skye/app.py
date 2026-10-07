@@ -187,14 +187,22 @@ async def run() -> None:
             key_prefix=config.composio_api_key.split("_", 1)[0],
             key_length=len(config.composio_api_key),
         )
-    connectors = ConnectorService(database, composio)
+    connectors = ConnectorService(
+        database,
+        composio,
+        timeout_seconds=config.skye_connector_timeout_seconds,
+    )
     groups = GroupContextService(config, database, bot)
     media_groups = MediaGroupService(config, database)
     attachments = AttachmentService(config, bot, audio)
 
     access = AccessService(database, config.skye_owner_ids)
     sparks = SparkService(
-        database, PricingService(sparks_per_rub=config.skye_sparks_per_rub)
+        database,
+        PricingService(
+            sparks_per_rub=config.skye_sparks_per_rub,
+            connector_price_rub=config.skye_connector_call_rub,
+        ),
     )
     billing = BillingService(database, sparks, config.telegram_bot_token)
     skills = SkillService(database, config.skye_max_attachment_bytes)

@@ -191,6 +191,12 @@ def test_fal_provider_requires_a_key() -> None:
         settings(skye_audio_provider="fal")
 
 
+def test_connector_defaults() -> None:
+    loaded = settings()
+    assert loaded.skye_connector_call_rub == 0.50
+    assert loaded.skye_connector_timeout_seconds == 30.0
+
+
 def test_fal_media_defaults_are_the_requested_endpoints() -> None:
     loaded = settings(skye_fal_key="fal-test")
 

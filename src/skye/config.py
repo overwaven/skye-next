@@ -89,6 +89,10 @@ class Settings(BaseSettings):
     skye_sandbox_total_bytes: int = Field(default=21_474_836_480, ge=1)
     skye_sandbox_max_concurrent: int = Field(default=4, ge=1, le=32)
     composio_api_key: str | None = None
+    # Connector tool calls are billed at a flat ruble rate (Composio charges per
+    # call and reports no cost); the bridge timeout bounds one MCP call.
+    skye_connector_call_rub: float = Field(default=0.50, ge=0)
+    skye_connector_timeout_seconds: float = Field(default=30.0, ge=5, le=300)
     skye_owner_ids: OwnerIds = Field(min_length=1)
     skye_database_path: Path = Path("data/skye.db")
     skye_base_prompt_path: Path = Path("BASE_PROMPT.md")

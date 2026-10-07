@@ -59,6 +59,10 @@ Stars. There is no subscription.
   rate and are one-time Telegram Stars payments.
 - In groups each person pays for their own requests. Any member can volunteer as
   the chat **sponsor** and cover every request from their own wallet.
+- Connector tool calls are bridged locally and billed at a flat rate
+  (`SKYE_CONNECTOR_CALL_RUB`). Chat Completions cannot run provider-hosted MCP
+  tools, so each Composio or custom MCP endpoint is connected in-process and its
+  tools are exposed to the model as ordinary functions.
 - Spending is shown under a reply by default; each scope can hide it.
 
 ## Tooling

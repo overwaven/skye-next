@@ -37,6 +37,7 @@ class TurnUsage:
     reasoning_tokens: int = 0
     images: int = 0
     image_model: str | None = None
+    connector_calls: int = 0
     provider_cost_rub: float | None = None
 
     @property
@@ -71,18 +72,26 @@ IMAGE_PRICES: dict[str, float] = {
     "flux-3-image": 5.26,
 }
 
+# A connector tool call is billed at a flat rate: Composio charges per call and
+# reports no cost in the response.
+DEFAULT_CONNECTOR_PRICE_RUB = 0.50
+
 
 class PricingService:
     def __init__(
         self,
         *,
         sparks_per_rub: float = 1.0,
+        connector_price_rub: float = DEFAULT_CONNECTOR_PRICE_RUB,
         model_prices: dict[str, ModelPrice] | None = None,
         image_prices: dict[str, float] | None = None,
     ) -> None:
         if sparks_per_rub <= 0:
             raise ValueError("sparks_per_rub must be positive")
+        if connector_price_rub < 0:
+            raise ValueError("connector_price_rub must not be negative")
         self.sparks_per_rub = sparks_per_rub
+        self.connector_price_rub = connector_price_rub
         self.model_prices = dict(MODEL_PRICES if model_prices is None else model_prices)
         self.image_prices = dict(IMAGE_PRICES if image_prices is None else image_prices)
 
@@ -108,6 +117,7 @@ class PricingService:
             + usage.cached_tokens / 1_000_000 * price.cached_input_per_million
         )
         total += usage.images * self.image_price(usage.image_model)
+        total += usage.connector_calls * self.connector_price_rub
         return max(total, 0.0)
 
     def sparks(self, usage: TurnUsage, *, provider_cost_rub: float | None = None) -> float:

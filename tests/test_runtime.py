@@ -4,7 +4,7 @@ import io
 import zipfile
 from types import SimpleNamespace
 from typing import Any, cast
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, Mock, patch
 
 import httpx
 import pytest
@@ -203,17 +203,25 @@ def test_automation_tools_are_attached_when_managing() -> None:
     assert "You can create scheduled or webhook automations" in cast(str, agent.instructions)
 
 
-async def test_connected_apps_stay_detached_until_the_mcp_bridge_lands() -> None:
-    from skye.connectors import ConnectorTools
+async def test_connectors_attach_through_the_local_mcp_bridge() -> None:
+    from skye.connectors import ConnectorSession
 
     runtime = runtime_for_run()
-    connectors = AsyncMock()
-    connectors.hosted_tools.return_value = ConnectorTools(
-        (cast(Any, SimpleNamespace(name="mcp_tool")),), ("Gmail",)
-    )
+    connector_tool = cast(Any, SimpleNamespace(name="gmail__send_email"))
+    session = ConnectorSession((connector_tool,), ("Gmail",), {"n": 0})
+
+    class FakeOpen:
+        async def __aenter__(self) -> ConnectorSession:
+            return session
+
+        async def __aexit__(self, *_exc: object) -> bool:
+            return False
+
+    connectors = SimpleNamespace(open=Mock(return_value=FakeOpen()))
     runtime.connectors = connectors
 
-    with patch("skye.runtime.Runner.run_streamed", return_value=FakeStream()):
+    starter = Mock(return_value=FakeStream())
+    with patch("skye.runtime.Runner.run_streamed", starter):
         output = await runtime.run(
             RequestContext(1, "private", 1),
             ChatSettings("gpt-5.6-luna", "medium", memory_enabled=False),
@@ -222,7 +230,9 @@ async def test_connected_apps_stay_detached_until_the_mcp_bridge_lands() -> None
         )
 
     assert output.text == "done"
-    connectors.hosted_tools.assert_awaited_once()
+    connectors.open.assert_called_once()
+    agent = starter.call_args.args[0]
+    assert "gmail__send_email" in {getattr(tool, "name", None) for tool in agent.tools}
 
 
 def test_turn_images_collect_finished_pictures_within_limit() -> None:

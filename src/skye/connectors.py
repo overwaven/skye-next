@@ -6,19 +6,22 @@ import json
 import re
 import socket
 import uuid
-from collections.abc import Mapping, Sequence
+from collections.abc import AsyncIterator, Mapping, Sequence
+from contextlib import AsyncExitStack, asynccontextmanager
 from dataclasses import dataclass, replace
 from typing import Any, Protocol, cast
 from urllib.parse import urlsplit
 
 import httpx
 import structlog
-from agents import HostedMCPTool, Tool, ToolSearchTool
+from agents import FunctionTool, Tool
+from agents.mcp import MCPServerStreamableHttp
+from agents.mcp.util import MCPUtil
+from agents.tool_context import ToolContext
 from aiogram import Bot
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup, Message
-from openai.types.responses.tool_param import Mcp
 
 from .db import Database
 from .models import (
@@ -98,9 +101,32 @@ class ComposioAPI(Protocol):
 
 
 @dataclass(frozen=True, slots=True)
-class ConnectorTools:
+class McpConnection:
+    """A local MCP endpoint to bridge into function tools."""
+
+    url: str
+    headers: dict[str, str]
+    label: str
+    description: str
+
+
+@dataclass(frozen=True, slots=True)
+class ConnectorConnections:
+    connections: tuple[McpConnection, ...]
+    labels: tuple[str, ...]
+
+
+@dataclass(slots=True)
+class ConnectorSession:
+    """Live connector tools for one run, plus how many were actually called."""
+
     tools: tuple[Tool, ...]
     labels: tuple[str, ...]
+    counter: dict[str, int]
+
+    @property
+    def calls(self) -> int:
+        return self.counter.get("n", 0)
 
 
 def composio_user_key(user_id: int) -> str:
@@ -452,9 +478,16 @@ def _composio_error_fields(response: httpx.Response) -> tuple[str | None, str | 
 
 
 class ConnectorService:
-    def __init__(self, database: Database, client: ComposioAPI | None) -> None:
+    def __init__(
+        self,
+        database: Database,
+        client: ComposioAPI | None,
+        *,
+        timeout_seconds: float = 30.0,
+    ) -> None:
         self.database = database
         self.client = client
+        self.timeout_seconds = timeout_seconds
         self._locks: dict[int, asyncio.Lock] = {}
 
     @property
@@ -677,22 +710,77 @@ class ConnectorService:
         await self.database.delete_connector_share(share_id)
         return share
 
-    async def hosted_tools(self, context: RequestContext) -> ConnectorTools:
+    async def connections(self, context: RequestContext) -> ConnectorConnections:
         if context.chat_type == "private":
-            return await self._private_tools(context.user_id)
-        return await self._group_tools(context.chat_id)
+            return await self._private_connections(context.user_id)
+        return await self._group_connections(context.chat_id)
 
-    async def _private_tools(self, user_id: int) -> ConnectorTools:
+    @asynccontextmanager
+    async def open(self, context: RequestContext) -> AsyncIterator[ConnectorSession]:
+        """Bridge this scope's connectors into function tools for one run.
+
+        Chat Completions cannot call provider-hosted MCP tools, so each MCP
+        endpoint is connected locally, its tools are wrapped as ordinary
+        function tools, and the servers stay open for the run.
+        """
+
+        pending = await self.connections(context)
+        counter: dict[str, int] = {"n": 0}
+        if not pending.connections:
+            yield ConnectorSession((), pending.labels, counter)
+            return
+        async with AsyncExitStack() as stack:
+            tools: list[Tool] = []
+            seen: set[str] = set()
+            for connection in pending.connections:
+                server = MCPServerStreamableHttp(
+                    params={
+                        "url": connection.url,
+                        "headers": connection.headers,
+                        "timeout": self.timeout_seconds,
+                    },
+                    name=connection.label,
+                    cache_tools_list=True,
+                    client_session_timeout_seconds=self.timeout_seconds,
+                    max_retry_attempts=1,
+                    retry_backoff_seconds_base=0.5,
+                )
+                try:
+                    await stack.enter_async_context(server)
+                    listed = await server.list_tools()
+                except Exception as error:
+                    log.warning(
+                        "connector_mcp_unavailable",
+                        label=connection.label,
+                        error=type(error).__name__,
+                    )
+                    continue
+                for item in listed:
+                    public = public_tool_name(connection.label, item.name)
+                    if public in seen:
+                        continue
+                    seen.add(public)
+                    base = MCPUtil.to_function_tool(
+                        item,
+                        server,
+                        convert_schemas_to_strict=False,
+                        tool_name_override=public,
+                    )
+                    tools.append(_count_calls(base, counter))
+                log.info("connector_attached", label=connection.label, tools=len(listed))
+            yield ConnectorSession(tuple(tools), pending.labels, counter)
+
+    async def _private_connections(self, user_id: int) -> ConnectorConnections:
         snapshot = await self.snapshot(user_id)
-        tools: list[Tool] = []
+        connections: list[McpConnection] = []
         labels: list[str] = []
         connected = [item for item in snapshot.apps if item.status == "connected"]
         slugs = [item.slug for item in connected]
         if slugs and self.client is not None:
             try:
                 url, headers = await self._session_url(user_id, slugs, _account_map(connected))
-                tools.append(
-                    _composio_tool(url, "composio", "Connected apps for this user.", headers)
+                connections.append(
+                    McpConnection(url, dict(headers), "composio", "Connected apps for this user.")
                 )
                 labels.extend(item.name for item in connected)
             except ConnectorError:
@@ -700,15 +788,20 @@ class ConnectorService:
         for connector in snapshot.custom:
             if not connector.enabled:
                 continue
-            tools.append(_custom_tool(connector))
+            connections.append(
+                McpConnection(
+                    connector.url,
+                    dict(connector.headers),
+                    mcp_label("mcp", connector.id),
+                    connector.name,
+                )
+            )
             labels.append(connector.name)
-        if tools:
-            tools.append(ToolSearchTool())
-        return ConnectorTools(tuple(tools), tuple(labels))
+        return ConnectorConnections(tuple(connections), tuple(labels))
 
-    async def _group_tools(self, chat_id: int) -> ConnectorTools:
+    async def _group_connections(self, chat_id: int) -> ConnectorConnections:
         shares = await self.group_shares(chat_id)
-        tools: list[Tool] = []
+        connections: list[McpConnection] = []
         labels: list[str] = []
         slugs_by_owner: dict[int, list[str]] = {}
         owner_names: dict[int, str] = {}
@@ -724,7 +817,14 @@ class ConnectorService:
             connector = await self.database.get_custom_connector(share.owner_id, share.ref)
             if connector is None or not connector.enabled:
                 continue
-            tools.append(_custom_tool(connector))
+            connections.append(
+                McpConnection(
+                    connector.url,
+                    dict(connector.headers),
+                    mcp_label("mcp", connector.id),
+                    connector.name,
+                )
+            )
             labels.append(f"{connector.name} (shared by {share.owner_name})")
         if slugs_by_owner and self.client is not None:
             for owner_id, slugs in slugs_by_owner.items():
@@ -738,21 +838,19 @@ class ConnectorService:
                 except ConnectorError:
                     log.warning("composio_session_failed")
                     continue
-                tools.append(
-                    _composio_tool(
+                connections.append(
+                    McpConnection(
                         url,
+                        dict(headers),
                         mcp_label("cmp", str(owner_id)),
                         f"Apps shared by {owner_names.get(owner_id, 'a member')}.",
-                        headers,
                     )
                 )
                 labels.extend(
                     f"{app_names[owner_id, slug]} (shared by {owner_names[owner_id]})"
                     for slug in slugs
                 )
-        if tools:
-            tools.append(ToolSearchTool())
-        return ConnectorTools(tuple(tools), tuple(labels))
+        return ConnectorConnections(tuple(connections), tuple(labels))
 
     async def _owned_name(self, owner_id: int, kind: ConnectorKind, ref: str) -> str:
         if kind == "app":
@@ -830,34 +928,26 @@ def _require_slug(slug: str) -> str:
     return value
 
 
-def _composio_tool(
-    url: str, label: str, description: str, headers: Mapping[str, str] | None = None
-) -> HostedMCPTool:
-    config: dict[str, Any] = {
-        "type": "mcp",
-        "server_label": label,
-        "server_url": url,
-        "server_description": description,
-        "require_approval": "never",
-        "defer_loading": True,
-    }
-    if headers:
-        config["headers"] = dict(headers)
-    return HostedMCPTool(tool_config=cast(Mcp, config))
+def public_tool_name(label: str, name: str) -> str:
+    """A model-safe, collision-resistant tool name for one MCP tool."""
+
+    prefix = re.sub(r"[^A-Za-z0-9_-]+", "-", label).strip("-") or "mcp"
+    tool = re.sub(r"[^A-Za-z0-9_-]+", "_", name).strip("_") or "tool"
+    return f"{prefix}__{tool}"[:64]
 
 
-def _custom_tool(connector: CustomConnector) -> HostedMCPTool:
-    config: dict[str, Any] = {
-        "type": "mcp",
-        "server_label": mcp_label("mcp", connector.id),
-        "server_url": connector.url,
-        "server_description": connector.name,
-        "require_approval": "never",
-        "defer_loading": True,
-    }
-    if connector.headers:
-        config["headers"] = connector.headers
-    return HostedMCPTool(tool_config=cast(Mcp, config))
+def _count_calls(tool: FunctionTool, counter: dict[str, int]) -> FunctionTool:
+    """Wrap a bridged tool so a successful call is billable."""
+
+    original = tool.on_invoke_tool
+
+    async def counted(context: ToolContext[Any], arguments: str) -> Any:
+        result = await original(context, arguments)
+        counter["n"] = counter.get("n", 0) + 1
+        return result
+
+    tool.on_invoke_tool = counted
+    return tool
 
 
 def is_sensitive(kind: ConnectorKind, ref: str) -> bool:
