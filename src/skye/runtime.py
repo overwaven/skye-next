@@ -12,7 +12,7 @@ import zipfile
 from collections import defaultdict, deque
 from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import asynccontextmanager, suppress
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Any, cast
 
 import structlog
@@ -59,6 +59,7 @@ from .images import ImageProvider, TurnImages, turn_sources
 from .memory import MemoryService
 from .models import AgentCapability, ChatSettings, InstalledAgent, RequestContext, Skill
 from .ops_capture import OpsContext, bind_context, clear_context, new_run_id
+from .pricing import TurnUsage
 from .sandbox import SandboxService, ScopeSandbox, turn_files
 from .sessions import DatabaseSession, without_inline_payloads
 from .skills import SkillService
@@ -156,6 +157,7 @@ class RunOutput:
     files: tuple[GeneratedFile, ...] = ()
     usage_tokens: int = 0
     sent: int = 0
+    usage: TurnUsage = field(default_factory=TurnUsage)
 
 
 @dataclass(slots=True)
@@ -1127,14 +1129,17 @@ class AgentRuntime:
         if on_event is not None:
             for image in images:
                 await on_event(RunEvent(kind="image", image=image))
-        usage = _usage_tokens(result)
-        if usage is None:
-            usage = estimate_usage_tokens(user_input, final)
+        details = _usage_details(
+            result, images=len(images), image_model=self.config.skye_image_model
+        )
+        usage = details.total_tokens
+        if usage <= 0:
+            usage = _usage_tokens(result) or estimate_usage_tokens(user_input, final)
         cleaned = sanitize_citations(
             without_sandbox_links(final.strip()),
             annotations=url_citations(result),
         )
-        return RunOutput(cleaned, images, files, usage)
+        return RunOutput(cleaned, images, files, usage, usage=details)
 
     async def _delay(self, active: _ActiveRun, seconds: float) -> None:
         if active.cancel.is_set():
@@ -1498,6 +1503,122 @@ def _usage_value(usage: object) -> int | None:
         if isinstance(total, int):
             return total
     return None
+
+
+def _usage_details(
+    result: RunResultStreaming,
+    *,
+    images: int = 0,
+    image_model: str | None = None,
+) -> TurnUsage:
+    """Structured usage for one run, including a provider-reported cost if any."""
+
+    wrapper = getattr(result, "context_wrapper", None)
+    usage = getattr(wrapper, "usage", None) if wrapper is not None else None
+    details = _usage_from(usage)
+    if details is None:
+        details = _usage_from_responses(result)
+    return replace(
+        details,
+        images=images,
+        image_model=image_model if image_model is not None else details.image_model,
+    )
+
+
+def _usage_from_responses(result: RunResultStreaming) -> TurnUsage:
+    total = TurnUsage()
+    found = False
+    for response in getattr(result, "raw_responses", ()) or ():
+        part = _usage_from(getattr(response, "usage", None))
+        model = getattr(response, "model", None)
+        if part is None and not isinstance(model, str):
+            continue
+        found = True
+        part = part or TurnUsage()
+        total = TurnUsage(
+            model=total.model or part.model or (model if isinstance(model, str) else None),
+            input_tokens=total.input_tokens + part.input_tokens,
+            output_tokens=total.output_tokens + part.output_tokens,
+            cached_tokens=total.cached_tokens + part.cached_tokens,
+            reasoning_tokens=total.reasoning_tokens + part.reasoning_tokens,
+            provider_cost_rub=_add_cost(total.provider_cost_rub, part.provider_cost_rub),
+        )
+    return total if found else TurnUsage()
+
+
+def _usage_from(usage: object) -> TurnUsage | None:
+    if usage is None:
+        return None
+    inp = _int_field(usage, "input_tokens", "prompt_tokens")
+    out = _int_field(usage, "output_tokens", "completion_tokens")
+    if inp is None and out is None:
+        total = _int_field(usage, "total_tokens")
+        if total is None:
+            return None
+        inp, out = 0, total
+    return TurnUsage(
+        model=_str_field(usage, "model"),
+        input_tokens=int(inp or 0),
+        output_tokens=int(out or 0),
+        cached_tokens=_detail_int(usage, "cached_tokens"),
+        reasoning_tokens=_detail_int(usage, "reasoning_tokens"),
+        provider_cost_rub=_extra_float(usage, "cost"),
+    )
+
+
+def _raw_field(usage: object, key: str) -> object:
+    if isinstance(usage, dict):
+        return usage.get(key)
+    value = getattr(usage, key, None)
+    if value is not None:
+        return value
+    extra = getattr(usage, "model_extra", None)
+    if isinstance(extra, dict):
+        return extra.get(key)
+    return None
+
+
+def _int_field(usage: object, *keys: str) -> int | None:
+    for key in keys:
+        value = _raw_field(usage, key)
+        if isinstance(value, int) and not isinstance(value, bool):
+            return value
+    return None
+
+
+def _str_field(usage: object, key: str) -> str | None:
+    value = _raw_field(usage, key)
+    return value if isinstance(value, str) else None
+
+
+def _extra_float(usage: object, key: str) -> float | None:
+    value = _raw_field(usage, key)
+    if isinstance(value, bool) or not isinstance(value, int | float):
+        return None
+    return float(value)
+
+
+def _detail_int(usage: object, key: str) -> int:
+    containers = (
+        "input_tokens_details",
+        "prompt_tokens_details",
+        "output_tokens_details",
+        "completion_tokens_details",
+    )
+    for name in containers:
+        container = _raw_field(usage, name)
+        if container is None:
+            continue
+        value = _raw_field(container, key)
+        if isinstance(value, int) and not isinstance(value, bool):
+            return value
+    return 0
+
+
+def _add_cost(first: float | None, second: float | None) -> float | None:
+    if first is None and second is None:
+        return None
+    return (first or 0.0) + (second or 0.0)
 
 
 def telegram_run_key(chat_id: int, thread_id: int) -> str:

@@ -1,9 +1,15 @@
+"""Telegram Stars top-ups for Sparks and the account panel.
+
+Stars are only a payment rail here: a one-time payment credits the user's
+Sparks wallet. There is no subscription. Spending is metered per request through
+:mod:`skye.sparks`.
+"""
+
 from __future__ import annotations
 
 import hashlib
 import hmac
-import time
-from dataclasses import dataclass, replace
+from typing import Any
 
 import structlog
 from aiogram import Bot
@@ -19,78 +25,41 @@ from aiogram.types import (
 )
 
 from .access import AccessService
-from .config import HOSTED_MODEL, clamp_model
 from .db import Database
-from .models import ChatSettings, PlanId, RequestContext, Scope, StarEntitlement
+from .models import RequestContext, WalletEntry
 from .rich import RichMessages
+from .sparks import (
+    PACKAGES,
+    SPARKS_NAME,
+    SPARKS_SYMBOL,
+    STARS_CURRENCY,
+    SparkPackage,
+    SparkService,
+    format_amount,
+    package_by_id,
+)
 
 log = structlog.get_logger()
 
-STARS_CURRENCY = "XTR"
-SUBSCRIPTION_PERIOD = 2_592_000
+LEDGER_LIMIT = 6
 
 
 class BillingError(ValueError):
     """User-facing Stars billing failure."""
 
 
-@dataclass(frozen=True, slots=True)
-class StarPlan:
-    id: PlanId
-    name: str
-    emoji: str
-    stars: int
-    recurring: bool
-    invoice_title: str
-    invoice_description: str
-
-    @property
-    def button_label(self) -> str:
-        if self.recurring:
-            return f"{self.name} · {self.stars} ⭐ / month"
-        return f"{self.name} · {self.stars} ⭐"
-
-    @property
-    def pay_label(self) -> str:
-        if self.recurring:
-            return f"Subscribe · {self.stars} ⭐"
-        return f"Pay {self.stars} ⭐"
-
-
-PLANS: dict[PlanId, StarPlan] = {
-    "plus": StarPlan(
-        id="plus",
-        name="Skye Plus",
-        emoji="🌙",
-        stars=449,
-        recurring=True,
-        invoice_title="Skye Plus",
-        invoice_description=(
-            "Monthly Skye Plus. Expanded daily message allowance and your own agents. "
-            "Renews every 30 days in Telegram Stars."
-        ),
-    ),
-}
-
-
-def plan_by_id(plan_id: str) -> StarPlan:
-    if plan_id not in PLANS:
-        raise BillingError("Unknown Skye plan.")
-    return PLANS[plan_id]
-
-
-def encode_payload(plan_id: PlanId, user_id: int, secret: str) -> str:
-    body = f"{plan_id}:{user_id}"
+def encode_payload(package_id: str, user_id: int, secret: str) -> str:
+    body = f"{package_id}:{user_id}"
     signature = hmac.new(secret.encode(), body.encode(), hashlib.sha256).hexdigest()[:16]
     return f"{body}:{signature}"
 
 
-def decode_payload(payload: str, secret: str) -> tuple[StarPlan, int]:
+def decode_payload(payload: str, secret: str) -> tuple[SparkPackage, int]:
     parts = payload.split(":")
     if len(parts) != 3:
         raise BillingError("This invoice is not valid.")
-    plan_id, raw_user, signature = parts
-    body = f"{plan_id}:{raw_user}"
+    package_id, raw_user, signature = parts
+    body = f"{package_id}:{raw_user}"
     expected = hmac.new(secret.encode(), body.encode(), hashlib.sha256).hexdigest()[:16]
     if not hmac.compare_digest(expected, signature):
         raise BillingError("This invoice is not valid.")
@@ -98,223 +67,92 @@ def decode_payload(payload: str, secret: str) -> tuple[StarPlan, int]:
         user_id = int(raw_user)
     except ValueError as error:
         raise BillingError("This invoice is not valid.") from error
-    return stored_plan(plan_id), user_id
-
-
-def stored_plan(plan_id: str) -> StarPlan:
-    parsed = _as_plan_id(plan_id)
-    if parsed is None:
-        raise BillingError("Unknown Skye plan.")
-    if parsed in PLANS:
-        return PLANS[parsed]
-    return StarPlan(
-        id=parsed,
-        name="Skye",
-        emoji="🌙",
-        stars=0,
-        recurring=parsed != "trial",
-        invoice_title="Skye",
-        invoice_description="Skye access.",
-    )
-
-
-def _as_plan_id(plan_id: str) -> PlanId | None:
-    if plan_id == "trial":
-        return "trial"
-    if plan_id == "plus":
-        return "plus"
-    if plan_id == "super":
-        return "super"
-    if plan_id == "ultra":
-        return "ultra"
-    return None
-
-
-def remaining_copy(entitlement: StarEntitlement, now: int) -> str:
-    days = entitlement.days_left(now)
-    if days <= 0:
-        remaining = "Ends today."
-    elif days == 1:
-        remaining = "1 day left."
-    else:
-        remaining = f"{days} days left."
-    if entitlement.plan == "trial":
-        return f"{remaining} Your Plus preview ends automatically."
-    if entitlement.auto_renew:
-        return (
-            f"{remaining} Renews automatically. Telegram Stars will be charged again "
-            "at the end of this period."
-        )
-    return (
-        f"{remaining} This period will end, then Skye Plus stops. "
-        "There will be no further charges."
-    )
+    return package_by_id(package_id), user_id
 
 
 class BillingService:
-    def __init__(self, database: Database, secret: str) -> None:
+    def __init__(self, database: Database, sparks: SparkService, secret: str) -> None:
         self.database = database
+        self.sparks = sparks
         self.secret = secret
 
-    def payload(self, plan: StarPlan, user_id: int) -> str:
-        return encode_payload(plan.id, user_id, self.secret)
+    def payload(self, package: SparkPackage, user_id: int) -> str:
+        return encode_payload(package.id, user_id, self.secret)
 
-    async def entitlement(self, user_id: int, *, now: int | None = None) -> StarEntitlement | None:
-        return await self.database.active_entitlement(user_id, now=now)
-
-    async def complimentary(self, context: RequestContext, access: AccessService) -> bool:
-        if access.is_owner(context.user_id):
-            return True
-        return await self.database.access_effect(context.scope) == "allow"
-
-    async def clamp_settings(
-        self, context: RequestContext, settings: ChatSettings, access: AccessService
-    ) -> ChatSettings:
-        del context, access
-        if settings.model == HOSTED_MODEL:
-            return settings
-        return replace(settings, model=clamp_model(settings.model))
-
-    def validate_checkout(
+    def validate_topup(
         self,
         *,
         user_id: int,
         currency: str,
         total_amount: int,
         invoice_payload: str,
-        entitlement: StarEntitlement | None,
-        now: int | None = None,
-        renewal: bool = False,
-    ) -> StarPlan:
+    ) -> SparkPackage:
         if currency != STARS_CURRENCY:
-            raise BillingError("Skye plans are paid in Telegram Stars.")
-        plan, payload_user = decode_payload(invoice_payload, self.secret)
+            raise BillingError(f"{SPARKS_NAME} are paid in Telegram Stars.")
+        package, payload_user = decode_payload(invoice_payload, self.secret)
         if payload_user != user_id:
             raise BillingError("This invoice is for a different Telegram account.")
-        if renewal:
-            return plan
-        if plan.id not in PLANS:
-            raise BillingError("Unknown Skye plan.")
-        if total_amount != plan.stars:
-            raise BillingError("This invoice no longer matches the Skye plan.")
-        current = entitlement
-        if current is not None and now is not None and not current.active(now):
-            current = None
-        if (
-            current is not None
-            and current.plan == plan.id
-            and current.auto_renew
-            and (now is None or current.active(now))
-        ):
-            raise BillingError("This plan is already active.")
-        return plan
+        if total_amount != package.stars:
+            raise BillingError("This invoice no longer matches the package.")
+        return package
 
-    async def apply_payment(
-        self, user_id: int, payment: SuccessfulPayment, bot: Bot | None = None
-    ) -> StarEntitlement:
-        now = int(time.time())
-        existing = await self.database.star_payment(payment.telegram_payment_charge_id)
-        if existing is not None:
-            current = await self.database.star_entitlement(user_id)
-            if current is None or existing[0] != user_id:
-                raise BillingError("This payment was already recorded.")
-            return current
-        plan = self.validate_checkout(
+    async def apply_topup(self, user_id: int, payment: SuccessfulPayment) -> SparkPackage:
+        package = self.validate_topup(
             user_id=user_id,
             currency=payment.currency,
             total_amount=payment.total_amount,
             invoice_payload=payment.invoice_payload,
-            entitlement=await self.database.star_entitlement(user_id),
-            now=now,
-            renewal=bool(payment.is_recurring and not payment.is_first_recurring),
         )
-        recorded = await self.database.record_star_payment(
+        if await self.database.spark_topup(payment.telegram_payment_charge_id):
+            return package
+        recorded = await self.database.record_spark_topup(
             telegram_payment_charge_id=payment.telegram_payment_charge_id,
             user_id=user_id,
-            plan=plan.id,
+            package_id=package.id,
             stars=payment.total_amount,
-            invoice_payload=payment.invoice_payload,
-            is_recurring=bool(payment.is_recurring),
-            is_first_recurring=bool(payment.is_first_recurring),
-            subscription_expiration_date=payment.subscription_expiration_date,
+            sparks_milli=package.milli,
         )
-        current = await self.database.star_entitlement(user_id)
         if not recorded:
-            if current is None:
-                raise BillingError("This payment was already recorded.")
-            return current
-        if payment.is_recurring and not payment.is_first_recurring and current is not None:
-            expires_at = payment.subscription_expiration_date or (now + SUBSCRIPTION_PERIOD)
-            entitlement = await self.database.extend_star_entitlement(user_id, expires_at)
-            await self.database.record_product_event(user_id, "subscription_renewed")
-            return entitlement
-        expires_at = payment.subscription_expiration_date or (now + SUBSCRIPTION_PERIOD)
-        charge_id = payment.telegram_payment_charge_id if plan.recurring else None
-        if (
-            current is not None
-            and current.auto_renew
-            and current.telegram_payment_charge_id
-            and current.plan != plan.id
-            and bot is not None
-        ):
-            await self._stop_star_renewal(
-                bot, user_id, current.telegram_payment_charge_id
-            )
-        entitlement = await self.database.upsert_star_entitlement(
-            user_id=user_id,
-            plan=plan.id,
-            auto_renew=plan.recurring,
-            expires_at=expires_at,
-            telegram_payment_charge_id=charge_id,
-            trial_used=False,
+            return package
+        await self.sparks.credit(
+            user_id,
+            package.milli,
+            kind="topup",
+            reason="stars",
+            reference=payment.telegram_payment_charge_id,
         )
-        await self._align_model(user_id)
-        await self.database.record_product_event(user_id, "subscription_started")
-        return entitlement
+        log.info("sparks_topup", user_id=user_id, package=package.id, stars=payment.total_amount)
+        return package
 
-    async def cancel_renewal(self, user_id: int, bot: Bot) -> StarEntitlement:
-        current = await self.entitlement(user_id)
-        if current is None or not current.auto_renew:
-            raise BillingError("Nothing is set to renew.")
-        if current.telegram_payment_charge_id:
-            await self._stop_star_renewal(bot, user_id, current.telegram_payment_charge_id)
-        return await self.database.set_star_auto_renew(user_id, False)
-
-    async def _stop_star_renewal(self, bot: Bot, user_id: int, charge_id: str) -> None:
-        try:
-            await bot.edit_user_star_subscription(
-                user_id=user_id,
-                telegram_payment_charge_id=charge_id,
-                is_canceled=True,
-            )
-        except TelegramBadRequest as error:
-            log.warning("star_cancel_failed", user_id=user_id, error=type(error).__name__)
-
-    async def apply_refund(self, user_id: int, payment: RefundedPayment) -> StarEntitlement | None:
-        recorded = await self.database.star_payment(payment.telegram_payment_charge_id)
-        current = await self.database.star_entitlement(user_id)
-        if recorded is None or current is None or recorded[0] != user_id:
-            return current
-        if recorded[1] != current.plan:
-            return current
-        return await self.database.expire_star_entitlement(user_id, int(time.time()))
-
-    async def _align_model(self, user_id: int) -> None:
-        scope = Scope("user", user_id)
-        settings = await self.database.get_settings(scope)
-        if settings.model != HOSTED_MODEL:
-            await self.database.set_model(scope, HOSTED_MODEL)
+    async def apply_refund(self, user_id: int, payment: RefundedPayment) -> None:
+        if not await self.database.spark_topup(payment.telegram_payment_charge_id):
+            return
+        paid = await self.database.wallet_balance(user_id)
+        # Reverse what we can without letting a wallet go negative.
+        for entry in await self.sparks.ledger(user_id, limit=1):
+            if entry.reference == payment.telegram_payment_charge_id and entry.kind == "topup":
+                amount = min(entry.delta_milli, paid)
+                if amount > 0:
+                    await self.sparks.charge(
+                        user_id,
+                        amount,
+                        reason="refund",
+                        reference=payment.telegram_payment_charge_id,
+                    )
+                return
 
 
 class AccountPanel:
     def __init__(
         self,
         billing: BillingService,
+        sparks: SparkService,
         access: AccessService,
         rich: RichMessages,
         bot: Bot,
     ) -> None:
         self.billing = billing
+        self.sparks = sparks
         self.access = access
         self.rich = rich
         self.bot = bot
@@ -327,119 +165,84 @@ class AccountPanel:
         edit: bool = False,
         notice: str | None = None,
     ) -> None:
-        if context.chat_type != "private":
-            content = self.rich.prompt(
-                "Account",
-                "Account and Stars billing are available in a private chat.",
-            )
-            if edit:
-                await self.rich.edit(message, content)
-            else:
-                await self.rich.send(message, content)
-            return
         if await self._banned(context):
-            content = self.rich.prompt("Account", "This account is banned.")
-            if edit:
-                await self.rich.edit(message, content)
-            else:
-                await self.rich.send(message, content)
+            banned = self.rich.prompt("Account", "This account is banned.")
+            await self._render(message, context, banned, None, edit)
             return
-        now = int(time.time())
-        entitlement = await self.billing.entitlement(context.user_id, now=now)
         owner = self.access.is_owner(context.user_id)
-        complimentary = await self.billing.complimentary(context, self.access)
-        plan = PLANS.get(entitlement.plan) if entitlement is not None else None
-        if entitlement is not None and entitlement.plan == "trial":
-            plan = StarPlan(
-                "trial",
-                "Skye Plus preview",
-                "🌙",
-                0,
-                False,
-                "Skye Plus preview",
-                "Seven-day Skye Plus preview.",
-            )
-        content = self.rich.account(
+        if context.chat_type != "private":
+            await self._show_group(message, context, owner=owner, notice=notice, edit=edit)
+            return
+        balance = await self.sparks.balance(context.user_id)
+        ledger = await self.sparks.ledger(context.user_id, limit=LEDGER_LIMIT)
+        settings = await self.database_settings(context)
+        rows = [(entry, _ledger_label(entry)) for entry in ledger]
+        content = self.rich.sparks_account(
+            balance=balance,
+            entries=rows,
+            show_spend=settings,
             owner=owner,
-            complimentary=complimentary,
-            plan_name=None if plan is None else plan.name,
-            status=None if entitlement is None else remaining_copy(entitlement, now),
             notice=notice,
         )
-        markup = self._home_keyboard(entitlement, owner=owner)
-        if edit:
-            await self.rich.edit(message, content, reply_markup=markup)
-        else:
-            await self.rich.send(message, content, reply_markup=markup)
+        await self._render(message, context, content, self._private_keyboard(settings), edit)
 
     async def show_checkout(
-        self, message: Message, context: RequestContext, plan_id: str
+        self, message: Message, context: RequestContext, package_id: str
     ) -> None:
-        plan = plan_by_id(plan_id)
-        now = int(time.time())
-        entitlement = await self.billing.entitlement(context.user_id, now=now)
-        self.billing.validate_checkout(
-            user_id=context.user_id,
-            currency=STARS_CURRENCY,
-            total_amount=plan.stars,
-            invoice_payload=self.billing.payload(plan, context.user_id),
-            entitlement=entitlement,
-            now=now,
-        )
-        link = await self._invoice_link(plan, context.user_id)
+        package = package_by_id(package_id)
+        link = await self._invoice_link(package, context.user_id)
         await self.rich.edit(
             message,
-            self.rich.plan_checkout(
-                name=plan.name,
-                emoji=plan.emoji,
-                stars=plan.stars,
-                recurring=plan.recurring,
+            self.rich.topup_checkout(
+                name=package.name,
+                sparks=package.sparks,
+                stars=package.stars,
+                bonus=package.bonus_percent,
             ),
-            reply_markup=self._checkout_keyboard(plan, link),
+            reply_markup=self._checkout_keyboard(link),
         )
 
     async def handle_callback(
         self, message: Message, context: RequestContext, action: list[str]
     ) -> None:
-        if context.chat_type != "private":
-            raise BillingError("Account and Stars billing are available in a private chat.")
         if await self._banned(context):
             raise BillingError("This account is banned.")
-        if action == ["home"] or action == ["plans"]:
+        if action == ["home"]:
             await self.show(message, context, edit=True)
-        elif len(action) == 2 and action[0] == "plan":
+        elif len(action) == 2 and action[0] == "pack":
             await self.show_checkout(message, context, action[1])
-        elif action == ["cancel"]:
-            await self.rich.edit(
-                message,
-                self.rich.prompt(
-                    "Cancel renewal?",
-                    "Stop automatic renewal? You keep access until this period ends, "
-                    "and there will be no further charges.",
-                ),
-                reply_markup=self._cancel_keyboard(),
-            )
-        elif action == ["cancel", "yes"]:
-            await self.billing.cancel_renewal(context.user_id, self.bot)
+        elif action == ["spend", "toggle"]:
+            scope = context.scope
+            current = await self.database_settings(context)
+            await self.billing.database.set_sparks_display(scope, not current)
+            state = "off" if current else "on"
+            await self.show(message, context, edit=True, notice=f"Spend display is {state}.")
+        elif action == ["sponsor", "on"]:
+            if context.chat_type == "private":
+                raise BillingError("Sponsorship is a group feature.")
+            await self.sparks.set_sponsor(context.chat_id, context.user_id)
             await self.show(
                 message,
                 context,
                 edit=True,
-                notice="Automatic renewal is off. This period will end, then access stops.",
+                notice="You now pay for every request in this chat.",
             )
+        elif action == ["sponsor", "off"]:
+            sponsor = await self.sparks.sponsor(context.chat_id)
+            if sponsor != context.user_id:
+                raise BillingError("Only the current sponsor can stop.")
+            await self.sparks.clear_sponsor(context.chat_id)
+            await self.show(message, context, edit=True, notice="You are no longer the sponsor.")
         else:
             raise BillingError("Unknown account action.")
 
     async def pre_checkout(self, query: PreCheckoutQuery) -> None:
-        now = int(time.time())
         try:
-            self.billing.validate_checkout(
+            self.billing.validate_topup(
                 user_id=query.from_user.id,
                 currency=query.currency,
                 total_amount=query.total_amount,
                 invoice_payload=query.invoice_payload,
-                entitlement=await self.billing.database.star_entitlement(query.from_user.id),
-                now=now,
             )
         except BillingError as error:
             await query.answer(ok=False, error_message=str(error)[:200])
@@ -451,21 +254,17 @@ class AccountPanel:
         if payment is None:
             return
         try:
-            entitlement = await self.billing.apply_payment(context.user_id, payment, self.bot)
+            package = await self.billing.apply_topup(context.user_id, payment)
         except BillingError as error:
-            log.warning("star_payment_rejected", user_id=context.user_id, error=str(error)[:200])
+            log.warning("topup_rejected", user_id=context.user_id, error=str(error)[:200])
             await self.rich.send(message, str(error))
             return
-        plan = PLANS.get(entitlement.plan)
-        heading = plan.name if plan is not None else "Account"
+        balance = await self.sparks.balance(context.user_id)
         await self.rich.send(
             message,
             self.rich.prompt(
-                heading,
-                [
-                    f"{plan.emoji} {plan.name} is active. " if plan is not None else "",
-                    remaining_copy(entitlement, int(time.time())),
-                ],
+                f"{SPARKS_SYMBOL} {SPARKS_NAME}",
+                f"Added {package.sparks} {SPARKS_SYMBOL}. Balance: {format_amount(balance)}.",
             ),
         )
 
@@ -476,7 +275,7 @@ class AccountPanel:
         await self.billing.apply_refund(context.user_id, payment)
         await self.rich.send(
             message,
-            "That Stars payment was refunded. If nothing else is active, access has ended.",
+            f"That Stars payment was refunded. Your {SPARKS_NAME} balance was adjusted.",
         )
 
     async def paysupport(self, message: Message) -> None:
@@ -490,29 +289,62 @@ class AccountPanel:
         )
 
     async def terms(self, message: Message) -> None:
-        await self.rich.send(message, self.rich.plan_terms())
+        await self.rich.send(message, self.rich.sparks_terms())
+
+    # -- helpers -----------------------------------------------------------
+
+    async def database_settings(self, context: RequestContext) -> bool:
+        current = await self.billing.database.get_settings(context.scope)
+        return current.sparks_display
+
+    async def _show_group(
+        self,
+        message: Message,
+        context: RequestContext,
+        *,
+        owner: bool,
+        notice: str | None,
+        edit: bool,
+    ) -> None:
+        if not await self.access.allowed(context):
+            raise BillingError("Skye is not enabled in this chat.")
+        balance = await self.sparks.balance(context.user_id)
+        sponsor = await self.sparks.sponsor(context.chat_id)
+        content = self.rich.sparks_group(
+            balance=balance,
+            sponsor_id=sponsor,
+            user_id=context.user_id,
+            owner=owner,
+            notice=notice,
+        )
+        keyboard = self._group_keyboard(sponsor, context.user_id)
+        await self._render(message, context, content, keyboard, edit)
+
+    async def _render(
+        self,
+        message: Message,
+        context: RequestContext,
+        content: Any,
+        markup: InlineKeyboardMarkup | None,
+        edit: bool,
+    ) -> None:
+        if edit:
+            await self.rich.edit(message, content, reply_markup=markup)
+        else:
+            await self.rich.send(message, content, reply_markup=markup)
 
     async def _banned(self, context: RequestContext) -> bool:
         if self.access.is_owner(context.user_id):
             return False
-        return await self.billing.database.access_effect(Scope("user", context.user_id)) == "ban"
+        return await self.billing.database.access_effect(context.scope) == "ban"
 
-    async def _invoice_link(self, plan: StarPlan, user_id: int) -> str:
-        prices = [LabeledPrice(label=plan.name, amount=plan.stars)]
-        payload = self.billing.payload(plan, user_id)
+    async def _invoice_link(self, package: SparkPackage, user_id: int) -> str:
+        prices = [LabeledPrice(label=package.name, amount=package.stars)]
+        payload = self.billing.payload(package, user_id)
         try:
-            if plan.recurring:
-                return await self.bot.create_invoice_link(
-                    title=plan.invoice_title,
-                    description=plan.invoice_description,
-                    payload=payload,
-                    currency=STARS_CURRENCY,
-                    prices=prices,
-                    subscription_period=SUBSCRIPTION_PERIOD,
-                )
             return await self.bot.create_invoice_link(
-                title=plan.invoice_title,
-                description=plan.invoice_description,
+                title=package.invoice_title,
+                description=package.invoice_description,
                 payload=payload,
                 currency=STARS_CURRENCY,
                 prices=prices,
@@ -521,43 +353,50 @@ class AccountPanel:
             raise BillingError("Stars payments are not available on this bot yet.") from error
 
     @staticmethod
-    def _home_keyboard(
-        entitlement: StarEntitlement | None,
-        *,
-        owner: bool,
-    ) -> InlineKeyboardMarkup | None:
-        if owner:
-            return None
-        rows: list[list[InlineKeyboardButton]] = []
-        plus = PLANS["plus"]
-        if entitlement is None or entitlement.plan != plus.id:
-            rows.append(
-                [InlineKeyboardButton(text=plus.button_label, callback_data="acct:plan:plus")]
-            )
-        if entitlement is not None and entitlement.auto_renew:
-            rows.append(
-                [InlineKeyboardButton(text="Cancel renewal", callback_data="acct:cancel")]
-            )
-        return InlineKeyboardMarkup(inline_keyboard=rows) if rows else None
+    def _private_keyboard(show_spend: bool) -> InlineKeyboardMarkup:
+        rows: list[list[InlineKeyboardButton]] = [
+            [
+                InlineKeyboardButton(
+                    text=package.button_label, callback_data=f"acct:pack:{package.id}"
+                )
+            ]
+            for package in PACKAGES.values()
+        ]
+        rows.append(
+            [
+                InlineKeyboardButton(
+                    text="Hide spend" if show_spend else "Show spend",
+                    callback_data="acct:spend:toggle",
+                )
+            ]
+        )
+        return InlineKeyboardMarkup(inline_keyboard=rows)
 
     @staticmethod
-    def _checkout_keyboard(plan: StarPlan, link: str) -> InlineKeyboardMarkup:
+    def _group_keyboard(sponsor: int | None, user_id: int) -> InlineKeyboardMarkup:
+        if sponsor == user_id:
+            button = InlineKeyboardButton(text="Stop sponsoring", callback_data="acct:sponsor:off")
+        else:
+            button = InlineKeyboardButton(text="Sponsor this chat", callback_data="acct:sponsor:on")
+        return InlineKeyboardMarkup(inline_keyboard=[[button]])
+
+    @staticmethod
+    def _checkout_keyboard(link: str) -> InlineKeyboardMarkup:
         return InlineKeyboardMarkup(
             inline_keyboard=[
-                [InlineKeyboardButton(text=plan.pay_label, url=link)],
+                [InlineKeyboardButton(text="Pay with Stars", url=link)],
                 [InlineKeyboardButton(text="‹ Back", callback_data="acct:home")],
             ]
         )
 
-    @staticmethod
-    def _cancel_keyboard() -> InlineKeyboardMarkup:
-        return InlineKeyboardMarkup(
-            inline_keyboard=[
-                [
-                    InlineKeyboardButton(
-                        text="Cancel renewal", callback_data="acct:cancel:yes"
-                    ),
-                    InlineKeyboardButton(text="Keep plan", callback_data="acct:home"),
-                ]
-            ]
-        )
+
+def _ledger_label(entry: WalletEntry) -> str:
+    if entry.kind == "topup":
+        return "Top-up"
+    if entry.kind == "bonus":
+        return "Bonus"
+    if entry.kind == "refund":
+        return "Refund"
+    if entry.reason:
+        return entry.reason.replace("_", " ")
+    return entry.kind

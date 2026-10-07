@@ -12,7 +12,6 @@ import structlog
 from agents import set_default_openai_client, set_tracing_disabled
 from aiogram import Bot, Dispatcher
 from aiogram.client.session.aiohttp import AiohttpSession
-from aiogram.exceptions import TelegramAPIError
 from aiogram.types import (
     BotCommandScopeAllChatAdministrators,
     BotCommandScopeAllGroupChats,
@@ -22,7 +21,7 @@ from openai import AsyncOpenAI
 from pydantic import ValidationError
 from structlog.types import Processor
 
-from .access import AccessService, ChatAdministrator
+from .access import AccessService
 from .attachments import AttachmentService
 from .audio import AudioService
 from .automations import AutomationService
@@ -42,9 +41,11 @@ from .ops import OpsStore
 from .ops_capture import CapturingTransport
 from .ops_config import describe_fields
 from .ops_logging import OpsLogProcessor
+from .pricing import PricingService
 from .runtime import OPENAI_MAX_RETRIES, AgentRuntime
 from .sandbox import SandboxService
 from .skills import SkillService
+from .sparks import SparkService
 from .telegram import COMMANDS, PRIVATE_COMMANDS, TelegramApp, UpdateMiddleware
 from .telegram_projects import TelegramProjectService
 
@@ -179,27 +180,11 @@ async def run() -> None:
     media_groups = MediaGroupService(config, database)
     attachments = AttachmentService(config, bot, audio)
 
-    async def list_chat_administrators(
-        chat_id: int,
-    ) -> tuple[ChatAdministrator, ...] | None:
-        try:
-            members = await bot.get_chat_administrators(chat_id)
-        except TelegramAPIError:
-            log.warning("chat_admins_failed", chat_id=chat_id)
-            return None
-        return tuple(
-            ChatAdministrator(
-                user_id=member.user.id,
-                is_creator=member.status == "creator",
-                is_bot=member.user.is_bot,
-            )
-            for member in members
-        )
-
-    access = AccessService(
-        database, config.skye_owner_ids, list_administrators=list_chat_administrators
+    access = AccessService(database, config.skye_owner_ids)
+    sparks = SparkService(
+        database, PricingService(sparks_per_rub=config.skye_sparks_per_rub)
     )
-    billing = BillingService(database, config.telegram_bot_token)
+    billing = BillingService(database, sparks, config.telegram_bot_token)
     skills = SkillService(database, config.skye_max_attachment_bytes)
     automations = AutomationService(database, config.skye_web_origin)
     exa = ExaService(config.skye_exa_api_key) if config.skye_exa_api_key else None
@@ -251,6 +236,7 @@ async def run() -> None:
         skills,
         telegram_projects,
         billing,
+        sparks,
         automations,
     )
     dispatcher.update.outer_middleware(UpdateMiddleware(database, groups, media_groups))

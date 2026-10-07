@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import io
+import json
 import re
 from collections.abc import Awaitable, Callable, Sequence
 from typing import Any, Literal, cast
@@ -45,7 +46,7 @@ from .conversations import ConversationService
 from .custom_agents import AGENT_CAPABILITIES, CustomAgentService
 from .db import Database
 from .group_context import GroupContextService
-from .growth import GrowthService
+from .growth import ACTIVATION_BONUS, GrowthService
 from .media_groups import MediaGroupService
 from .memory import MemoryService
 from .models import (
@@ -61,7 +62,7 @@ from .models import (
     Scope,
     ScopeKind,
 )
-from .quota import AllowanceError, QuotaService
+from .quota import QuotaService
 from .rich import RichMessages
 from .runtime import (
     AgentRuntime,
@@ -72,6 +73,7 @@ from .runtime import (
     leftover_reply,
 )
 from .skills import SkillError, SkillPanel, SkillService, SkillWizard
+from .sparks import SPARKS_NAME, SPARKS_SYMBOL, SparkService, format_milli
 from .telegram_activity import TelegramActivity, TelegramChatAction
 from .telegram_projects import (
     PROJECT_KEYBOARD_CATCHUP,
@@ -88,7 +90,10 @@ from .ui import activity_message
 log = structlog.get_logger()
 REASONING: tuple[Reasoning, ...] = ("none", "low", "medium", "high", "xhigh", "max")
 BOT_NAME = re.compile(r"(?<!\w)(?:skye|скай)(?!\w)", re.IGNORECASE)
-GROUP_NEEDS_PLUS = "Group mode needs an admin with Skye Plus. Open /account in a private chat."
+GROUP_NEEDS_PLUS = (
+    "Skye is not enabled in this chat. An owner can allowlist it, or someone can "
+    "sponsor it from /account."
+)
 AdminAction = Literal["allow", "ban", "remove"]
 CATCHUP_PROMPT = (
     "Catch me up on this conversation: where things stand, open threads, and decisions. "
@@ -157,6 +162,7 @@ class TelegramApp:
         skills: SkillService,
         telegram_projects: TelegramProjectService,
         billing: BillingService,
+        sparks: SparkService,
         automations: AutomationService | None = None,
     ) -> None:
         self.config = config
@@ -174,14 +180,15 @@ class TelegramApp:
         self.skill_service = skills
         self.telegram_projects = telegram_projects
         self.billing = billing
+        self.sparks = sparks
         self.growth = GrowthService(database)
         self.automations = automations
-        self.quota = QuotaService(database, billing, access)
+        self.quota = QuotaService(database, access)
         self.rich = RichMessages(bot)
         self.connectors = ConnectorPanel(connectors, self.rich, bot)
         self.skill_panel = SkillPanel(skills, self.rich, bot)
         self.project_panel = ProjectPanel(telegram_projects, self.rich, bot)
-        self.account = AccountPanel(billing, access, self.rich, bot)
+        self.account = AccountPanel(billing, sparks, access, self.rich, bot)
         self.automation_panel = (
             AutomationPanel(automations, self.rich) if automations is not None else None
         )
@@ -318,7 +325,7 @@ class TelegramApp:
     async def terms(self, message: Message) -> None:
         await self.rich.send(
             message,
-            self.rich.plan_terms(),
+            self.rich.sparks_terms(),
             reply_markup=InlineKeyboardMarkup(
                 inline_keyboard=[
                     [InlineKeyboardButton(text="Terms of service", url=TERMS_URL)],
@@ -1260,12 +1267,13 @@ class TelegramApp:
         draft: bool | None = None,
     ) -> None:
         current = await self.database.get_settings(context.scope)
-        current = await self.billing.clamp_settings(context, current, self.access)
-        billed_user_id = await self.access.billed_user_id(context)
-        try:
-            await self.quota.check(context, billed_user_id=billed_user_id)
-        except AllowanceError as error:
-            await self._notify(message, context, error.message)
+        payer_id = await self.sparks.payer(context)
+        complimentary = await self.quota.complimentary(context, billed_user_id=payer_id)
+        paid = not complimentary and await self.quota.exhausted(
+            context, billed_user_id=payer_id
+        )
+        if paid and not await self.sparks.can_afford(payer_id):
+            await self._notify(message, context, self._topup_copy())
             return
         try:
             manage_automations = await self._can_edit(context)
@@ -1388,9 +1396,7 @@ class TelegramApp:
                     on_voice=on_voice,
                     awaiting_reply=awaiting_reply,
                 )
-                await self.quota.record(
-                    context, output.usage_tokens, billed_user_id=billed_user_id
-                )
+                await self._settle_turn(context, message, payer_id, paid, output)
                 if message is not None and context.chat_type != "private":
                     await self.groups.mark_seen(message)
                 await self._finish_visible(
@@ -1407,12 +1413,9 @@ class TelegramApp:
                     if await self.growth.completed_task(context.user_id, capability):
                         await self.rich.send(
                             message,
-                            "You have found a few ways I can help. Your seven-day "
-                            "Skye Plus preview is now active. It ends automatically.",
+                            f"You have found a few ways I can help. Here is a "
+                            f"{format_milli(ACTIVATION_BONUS)} {SPARKS_SYMBOL} bonus.",
                         )
-        except AllowanceError as error:
-            if sent_holder["count"] == 0:
-                await self._finish_turn(message, context, placeholder, error.message)
         except TimeoutError:
             if sent_holder["count"] == 0:
                 await self._finish_turn(
@@ -1677,6 +1680,76 @@ class TelegramApp:
         await self._deny_access(message, context)
         return False
 
+    @staticmethod
+    def _topup_copy() -> str:
+        return (
+            f"Your free allowance is used and your {SPARKS_NAME} balance is empty. "
+            "Top up in /account to keep going."
+        )
+
+    async def _settle_turn(
+        self,
+        context: RequestContext,
+        message: Message | None,
+        payer_id: int,
+        paid: bool,
+        output: RunOutput,
+    ) -> None:
+        usage = output.usage
+        if not paid:
+            await self.quota.record(context, output.usage_tokens, billed_user_id=payer_id)
+            return
+        cost = self.sparks.cost_milli(usage, provider_cost_rub=usage.provider_cost_rub)
+        if cost <= 0:
+            return
+        charged = await self.sparks.charge(
+            payer_id,
+            cost,
+            reason="request",
+            reference=f"tg:{context.chat_id}:{context.thread_id}",
+            provider_cost_rub=usage.provider_cost_rub,
+            detail=json.dumps(
+                {
+                    "model": usage.model,
+                    "in": usage.input_tokens,
+                    "out": usage.output_tokens,
+                    "cached": usage.cached_tokens,
+                    "images": usage.images,
+                },
+                separators=(",", ":"),
+            ),
+        )
+        if charged:
+            await self._show_spend(context, message, payer_id, cost, usage)
+
+    async def _show_spend(
+        self,
+        context: RequestContext,
+        message: Message | None,
+        payer_id: int,
+        cost: int,
+        usage: object,
+    ) -> None:
+        if message is None:
+            return
+        if context.chat_type != "private" and payer_id != context.user_id:
+            return
+        current = await self.database.get_settings(context.scope)
+        if not current.sparks_display:
+            return
+        await self.rich.send(message, self._spend_line(cost, usage))
+
+    @staticmethod
+    def _spend_line(cost: int, usage: object) -> str:
+        parts = [f"{SPARKS_SYMBOL} {format_milli(cost)}"]
+        total = getattr(usage, "total_tokens", 0)
+        images = getattr(usage, "images", 0)
+        if total:
+            parts.append(f"{total / 1000:.1f}k tokens")
+        if images:
+            parts.append(f"{images} image" + ("s" if images != 1 else ""))
+        return " · ".join(parts)
+
     async def _deny_access(self, message: Message, context: RequestContext) -> None:
         if context.chat_type == "private":
             await self.rich.send(message, "This account is banned.")
@@ -1687,9 +1760,9 @@ class TelegramApp:
         await self.rich.send(message, GROUP_NEEDS_PLUS)
 
     async def _require_plus(self, message: Message, context: RequestContext) -> bool:
-        if await self.access.plus(context):
+        if await self.access.allowed(context) and not await self.access.banned(context.user_id):
             return True
-        await self.rich.send(message, self.rich.plus_agents())
+        await self._deny_access(message, context)
         return False
 
     async def _can_edit(self, context: RequestContext) -> bool:

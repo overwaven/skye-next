@@ -4,10 +4,10 @@ from pathlib import Path
 import pytest
 
 from skye.access import AccessService
-from skye.billing import BillingService
 from skye.db import Database
-from skye.growth import TRIAL_SECONDS, GrowthService
+from skye.growth import ACTIVATION_BONUS, GrowthService
 from skye.models import RequestContext
+from skye.pricing import SPARK_SCALE
 from skye.quota import FREE_DAILY, QuotaService
 
 
@@ -28,8 +28,7 @@ def test_sources_are_short_opaque_labels() -> None:
     assert GrowthService.source("src_not allowed") is None
 
 
-async def test_trial_starts_after_activation_and_only_once(database: Database) -> None:
-    billing = BillingService(database, "secret")
+async def test_bonus_is_granted_after_activation_and_only_once(database: Database) -> None:
     growth = GrowthService(database)
     first_day = int(datetime(2026, 9, 1, tzinfo=UTC).timestamp())
     second_day = int(datetime(2026, 9, 2, tzinfo=UTC).timestamp())
@@ -40,22 +39,16 @@ async def test_trial_starts_after_activation_and_only_once(database: Database) -
 
     progress = await growth.progress(42)
     assert progress.activated
-    entitlement = await billing.entitlement(42, now=second_day)
-    assert entitlement is not None
-    assert entitlement.plan == "trial"
-    assert entitlement.expires_at == second_day + TRIAL_SECONDS
-    assert entitlement.trial_used
+    assert await database.wallet_balance(42) == ACTIVATION_BONUS
 
-    await database.expire_star_entitlement(42, second_day + TRIAL_SECONDS)
+    # A later task does not grant the bonus again.
     assert not await growth.completed_task(
-        42, "tool", occurred_at=second_day + TRIAL_SECONDS + 1
+        42, "tool", occurred_at=second_day + 86_400
     )
+    assert await database.wallet_balance(42) == ACTIVATION_BONUS
 
 
-async def test_trial_receives_plus_allowance(database: Database) -> None:
-    billing = BillingService(database, "secret")
-    access = AccessService(database, frozenset())
-    quota = QuotaService(database, billing, access)
+async def test_activation_bonus_scales_with_sparks(database: Database) -> None:
     growth = GrowthService(database)
     day_one = int(datetime(2026, 9, 1, tzinfo=UTC).timestamp())
     day_two = int(datetime(2026, 9, 2, tzinfo=UTC).timestamp())
@@ -63,7 +56,15 @@ async def test_trial_receives_plus_allowance(database: Database) -> None:
     await growth.completed_task(7, "chat", occurred_at=day_one + 1)
     await growth.completed_task(7, "chat", occurred_at=day_two)
 
+    assert ACTIVATION_BONUS == 50 * SPARK_SCALE
+
+
+async def test_free_allowance_is_exhausted_after_recording(database: Database) -> None:
+    access = AccessService(database, frozenset())
+    quota = QuotaService(database, access)
     context = RequestContext(7, "private", user_id=7)
     now = datetime(2026, 9, 2, tzinfo=UTC)
+
+    assert not await quota.exhausted(context, now=now)
     await quota.record(context, FREE_DAILY, now=now)
-    await quota.check(context, now=now)
+    assert await quota.exhausted(context, now=now)

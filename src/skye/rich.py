@@ -10,7 +10,6 @@ from aiogram.exceptions import TelegramBadRequest
 from aiogram.types import (
     BufferedInputFile,
     InlineKeyboardMarkup,
-    InputRichBlockDetails,
     InputRichBlockList,
     InputRichBlockListItem,
     InputRichBlockParagraph,
@@ -45,7 +44,9 @@ from .models import (
     Scope,
     Skill,
     TelegramProject,
+    WalletEntry,
 )
+from .sparks import SPARKS_NAME, SPARKS_SYMBOL, format_amount
 from .telegram_threads import api_thread_id, quote_reply, reply_parameters
 from .ui import activity_message, decorate_keyboard
 
@@ -239,6 +240,7 @@ class RichMessages:
                 ]
             )
         rows.append([cell("Memory"), cell("On" if settings.memory_enabled else "Off")])
+        rows.append([cell("Spend"), cell("On" if settings.sparks_display else "Off")])
         return InputRichMessage(
             blocks=[
                 InputRichBlockSectionHeading(text="Settings", size=2),
@@ -272,125 +274,98 @@ class RichMessages:
         )
 
     @staticmethod
-    def account(
+    def sparks_account(
         *,
+        balance: int,
+        entries: Sequence[tuple[WalletEntry, str]],
+        show_spend: bool,
         owner: bool,
-        complimentary: bool,
-        plan_name: str | None,
-        status: str | None,
+        notice: str | None = None,
+    ) -> InputRichMessage:
+        def cell(text: str, *, header: bool = False) -> RichBlockTableCell:
+            return RichBlockTableCell(
+                text=text, is_header=header or None, align="left", valign="middle"
+            )
+
+        blocks: list[InputRichBlockUnion] = [InputRichBlockSectionHeading(text="Account", size=2)]
+        if notice:
+            blocks.append(InputRichBlockParagraph(text=notice))
+        blocks.append(InputRichBlockSectionHeading(text=SPARKS_NAME, size=3))
+        if owner:
+            blocks.append(
+                InputRichBlockParagraph(text=f"Owner access. {SPARKS_NAME} are not charged.")
+            )
+        else:
+            blocks.append(InputRichBlockParagraph(text=f"Balance: {format_amount(balance)}"))
+        if entries:
+            rows = [[cell("Change", header=True), cell("What", header=True)]]
+            for entry, label in entries:
+                rows.append([cell(format_amount(entry.delta_milli)), cell(label)])
+            blocks.append(InputRichBlockTable(cells=rows, is_bordered=True, is_striped=True))
+        blocks.append(
+            InputRichBlockParagraph(text=f"Spend display: {'On' if show_spend else 'Off'}.")
+        )
+        return InputRichMessage(blocks=blocks)
+
+    @staticmethod
+    def sparks_group(
+        *,
+        balance: int,
+        sponsor_id: int | None,
+        user_id: int,
+        owner: bool,
         notice: str | None = None,
     ) -> InputRichMessage:
         blocks: list[InputRichBlockUnion] = [InputRichBlockSectionHeading(text="Account", size=2)]
         if notice:
             blocks.append(InputRichBlockParagraph(text=notice))
-        if owner:
-            blocks.append(InputRichBlockParagraph(text="Owner access. No Stars plan is required."))
-            return InputRichMessage(blocks=blocks)
-        if plan_name and status:
-            blocks.append(InputRichBlockSectionHeading(text=plan_name, size=3))
-            blocks.append(InputRichBlockParagraph(text=status))
-        elif status:
-            blocks.append(InputRichBlockParagraph(text=status))
-        elif complimentary:
-            blocks.append(InputRichBlockParagraph(text="Complimentary access from the allowlist."))
+        paragraph = (
+            f"Owner access. {SPARKS_NAME} are not charged."
+            if owner
+            else f"Your balance: {format_amount(balance)}"
+        )
+        blocks.append(InputRichBlockParagraph(text=paragraph))
+        if sponsor_id is None:
+            detail = "No sponsor. Each person pays for their own requests."
+        elif sponsor_id == user_id:
+            detail = f"You sponsor this chat. Every request is paid from your {SPARKS_NAME}."
         else:
-            blocks.extend(
-                [
-                    InputRichBlockSectionHeading(text="Free", size=3),
-                    InputRichBlockList(
-                        items=[
-                            InputRichBlockListItem(
-                                blocks=[
-                                    InputRichBlockParagraph(
-                                        text="A basic daily message allowance."
-                                    )
-                                ]
-                            ),
-                            InputRichBlockListItem(
-                                blocks=[
-                                    InputRichBlockParagraph(
-                                        text="Text, voice, images, documents, and web search."
-                                    )
-                                ]
-                            ),
-                        ]
-                    ),
-                    InputRichBlockSectionHeading(text="Skye Plus", size=3),
-                    InputRichBlockList(
-                        items=[
-                            InputRichBlockListItem(
-                                blocks=[
-                                    InputRichBlockParagraph(
-                                        text="More room for longer work."
-                                    )
-                                ]
-                            ),
-                            InputRichBlockListItem(
-                                blocks=[
-                                    InputRichBlockParagraph(
-                                        text="Create and edit your own agents."
-                                    )
-                                ]
-                            ),
-                        ]
-                    ),
-                    InputRichBlockParagraph(text="Paid monthly in Telegram Stars."),
-                ]
-            )
+            detail = "This chat is sponsored. The sponsor pays for every request."
+        blocks.append(InputRichBlockParagraph(text=detail))
         return InputRichMessage(blocks=blocks)
 
     @staticmethod
-    def plan_checkout(
-        *,
-        name: str,
-        emoji: str,
-        stars: int,
-        recurring: bool,
-    ) -> InputRichMessage:
-        if recurring:
-            price = f"{stars} Telegram Stars each month"
-            access = "More room for longer work and your own agents while the plan is active."
-        else:
-            price = f"{stars} Telegram Stars, once"
-            access = "Access for a limited time. This offer can be used once."
+    def topup_checkout(*, name: str, sparks: int, stars: int, bonus: int) -> InputRichMessage:
+        price = f"{stars} Telegram Stars, once."
+        if bonus:
+            price += f" {bonus}% more per Star than the smallest package."
         return InputRichMessage(
             blocks=[
-                InputRichBlockSectionHeading(text=f"{emoji} {name}", size=2),
-                InputRichBlockParagraph(text=f"{price}. {access}"),
-                RichMessages._plan_details(),
+                InputRichBlockSectionHeading(
+                    text=f"{SPARKS_SYMBOL} {sparks} {SPARKS_NAME}", size=2
+                ),
+                InputRichBlockParagraph(text=price),
+                InputRichBlockParagraph(
+                    text=f"{name}. {SPARKS_NAME} are spent on model requests and pictures."
+                ),
             ]
         )
 
     @staticmethod
-    def plan_terms() -> InputRichMessage:
+    def sparks_terms() -> InputRichMessage:
         return InputRichMessage(
             blocks=[
-                InputRichBlockSectionHeading(text="Skye plans", size=2),
+                InputRichBlockSectionHeading(text=SPARKS_NAME, size=2),
                 InputRichBlockParagraph(
                     text=(
-                        "Paid access uses Telegram Stars. Skye Plus is the paid plan. "
-                        "Free covers everyday tasks. Plus adds more room for longer work "
-                        "and lets you create and edit your own agents."
+                        f"{SPARKS_NAME} are Skye's currency. You buy them once with Telegram "
+                        "Stars and they are spent as you use Skye: model requests and "
+                        "pictures. A small free daily allowance stays available. In groups "
+                        "each person pays for their own requests unless someone sponsors "
+                        "the chat."
                     )
                 ),
-                RichMessages._plan_details(open_by_default=True),
             ]
-        )
-
-    @staticmethod
-    def _plan_details(*, open_by_default: bool = False) -> InputRichBlockDetails:
-        return InputRichBlockDetails(
-            summary="Plans",
-            blocks=[
-                InputRichBlockParagraph(
-                    text=(
-                        "Free covers everyday tasks with a basic daily message allowance. "
-                        "Skye Plus, 449 Stars each month, adds more room for longer work "
-                        "and lets you create and edit your own agents. Paid in Telegram Stars."
-                    )
-                ),
-            ],
-            is_open=True if open_by_default else None,
         )
 
     @staticmethod
@@ -475,13 +450,6 @@ class RichMessages:
                 InputRichBlockSectionHeading(text="Instructions", size=3),
                 InputRichBlockParagraph(text=instructions[:4000]),
             ]
-        )
-
-    @staticmethod
-    def plus_agents() -> InputRichMessage:
-        return RichMessages.prompt(
-            "Agents",
-            "Creating and editing agents is on Skye Plus. Open /account to upgrade.",
         )
 
     @staticmethod

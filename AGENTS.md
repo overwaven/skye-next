@@ -41,6 +41,26 @@ Two ideas carry the product:
 Documentation, commit messages, issues, and code comments are written in
 English. Conversations with the agent may happen in any language.
 
+## Economy
+
+Skye runs on **Sparks** (✦), an in-app currency users top up with Telegram
+Stars. There is no subscription.
+
+- Every request is metered. Model tokens and generated pictures are priced
+  through `pricing.py`, a provider-agnostic catalog keyed by model id. When the
+  provider reports the real cost of a request, that value wins and is converted
+  at `SKYE_SPARKS_PER_RUB`; otherwise the catalog is the fallback. Switching
+  providers is a catalog change, not a code change.
+- A wallet per user is an append-only ledger (`wallet_ledger`): top-ups, spends
+  with their token and image breakdown and the provider cost, bonuses, refunds.
+- A small free daily and monthly token allowance stays for everyone; past it,
+  runs are paid from the wallet.
+- Top-up packages are code-owned (`sparks.py`); bigger packages carry a better
+  rate and are one-time Telegram Stars payments.
+- In groups each person pays for their own requests. Any member can volunteer as
+  the chat **sponsor** and cover every request from their own wallet.
+- Spending is shown under a reply by default; each scope can hide it.
+
 ## Tooling
 
 ```bash

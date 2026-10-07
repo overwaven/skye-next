@@ -6,7 +6,6 @@ from .config import ModelId, Reasoning
 ScopeKind = Literal["user", "chat"]
 ChatType = Literal["private", "group", "supergroup", "channel"]
 AccessEffect = Literal["allow", "ban"]
-PlanId = Literal["trial", "plus", "super", "ultra"]
 MemoryCategory = Literal["preference", "personal", "project", "instruction", "other"]
 AgentVisibility = Literal["private", "unlisted", "public"]
 AgentCapability = Literal["web", "image", "shell"]
@@ -30,24 +29,16 @@ class AccessEntry:
 
 
 @dataclass(frozen=True, slots=True)
-class StarEntitlement:
+class WalletEntry:
+    id: int
     user_id: int
-    plan: PlanId
-    auto_renew: bool
-    expires_at: int
-    telegram_payment_charge_id: str | None
-    trial_used: bool
+    delta_milli: int
+    kind: str
+    reason: str
+    reference: str | None
+    provider_cost_rub: float | None
+    detail: str | None
     created_at: str
-    updated_at: str
-
-    def active(self, now: int) -> bool:
-        return self.expires_at > now
-
-    def days_left(self, now: int) -> int:
-        remaining = self.expires_at - now
-        if remaining <= 0:
-            return 0
-        return (remaining + 86_399) // 86_400
 
 
 @dataclass(frozen=True, slots=True)
@@ -72,6 +63,7 @@ class ChatSettings:
     reasoning: Reasoning
     memory_enabled: bool = True
     active_agent_id: str | None = None
+    sparks_display: bool = True
 
 
 @dataclass(frozen=True, slots=True)

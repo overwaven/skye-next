@@ -467,11 +467,18 @@ async def test_fire_uses_runtime_and_created_by() -> None:
     from skye.models import ChatSettings
 
     app = object.__new__(TelegramApp)
-    app.access = SimpleNamespace(
-        allowed=AsyncMock(return_value=True),
-        billed_user_id=AsyncMock(return_value=7),
+    app.access = SimpleNamespace(allowed=AsyncMock(return_value=True))
+    app.sparks = SimpleNamespace(
+        payer=AsyncMock(return_value=7),
+        can_afford=AsyncMock(return_value=True),
+        cost_milli=AsyncMock(return_value=0),
+        charge=AsyncMock(return_value=True),
     )
-    app.quota = SimpleNamespace(check=AsyncMock(), record=AsyncMock())
+    app.quota = SimpleNamespace(
+        complimentary=AsyncMock(return_value=False),
+        exhausted=AsyncMock(return_value=False),
+        record=AsyncMock(),
+    )
     app.runtime = FakeRuntime()
     app.database = SimpleNamespace(
         get_settings=AsyncMock(return_value=ChatSettings("gpt-5.6-luna", "medium"))

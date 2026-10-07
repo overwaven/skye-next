@@ -1,25 +1,29 @@
+"""Free allowance gate.
+
+Every account gets a small free daily and monthly token allowance. Past it, runs
+are paid for with Sparks (see :mod:`skye.sparks`). The billed user is the chat
+sponsor when one is set, otherwise the speaker.
+"""
+
 from __future__ import annotations
 
 from datetime import datetime
 
 from .access import AccessService
-from .billing import BillingService
 from .db import Database
 from .models import RequestContext, Scope
 
 FREE_DAILY = 20_000
 FREE_MONTHLY = 400_000
-PLUS_DAILY = 250_000
-PLUS_MONTHLY = 6_000_000
 
-DAILY_LIMIT_COPY = "The daily message allowance is used. You can continue tomorrow."
+DAILY_LIMIT_COPY = "The free daily allowance is used. Top up Sparks in /account to keep going."
 MONTHLY_LIMIT_COPY = (
-    "The monthly message allowance is used. You can continue when the next period starts."
+    "The free monthly allowance is used. Top up Sparks in /account to keep going."
 )
 
 
 class AllowanceError(Exception):
-    """The user is already over the message allowance for this period."""
+    """The user is over the free allowance and has no Sparks to continue."""
 
     def __init__(self, message: str) -> None:
         super().__init__(message)
@@ -27,9 +31,8 @@ class AllowanceError(Exception):
 
 
 class QuotaService:
-    def __init__(self, database: Database, billing: BillingService, access: AccessService) -> None:
+    def __init__(self, database: Database, access: AccessService) -> None:
         self.database = database
-        self.billing = billing
         self.access = access
 
     async def complimentary(
@@ -42,39 +45,16 @@ class QuotaService:
             return True
         return await self.database.access_effect(context.scope) == "allow"
 
-    async def limits(
+    async def exhausted(
         self,
         context: RequestContext,
         *,
         billed_user_id: int | None = None,
         now: datetime | None = None,
-    ) -> tuple[int, int]:
-        entitlement = await self.billing.entitlement(
-            self._billed_user_id(context, billed_user_id),
-            now=int(now.timestamp()) if now is not None else None,
-        )
-        if entitlement is not None and entitlement.plan in {"trial", "plus"}:
-            return PLUS_DAILY, PLUS_MONTHLY
-        return FREE_DAILY, FREE_MONTHLY
-
-    async def check(
-        self,
-        context: RequestContext,
-        *,
-        billed_user_id: int | None = None,
-        now: datetime | None = None,
-    ) -> None:
+    ) -> bool:
         user_id = self._billed_user_id(context, billed_user_id)
-        if await self.complimentary(context, billed_user_id=user_id):
-            return
-        daily_limit, monthly_limit = await self.limits(
-            context, billed_user_id=user_id, now=now
-        )
         daily, monthly = await self.database.usage_totals(user_id, now=now)
-        if monthly >= monthly_limit:
-            raise AllowanceError(MONTHLY_LIMIT_COPY)
-        if daily >= daily_limit:
-            raise AllowanceError(DAILY_LIMIT_COPY)
+        return daily >= FREE_DAILY or monthly >= FREE_MONTHLY
 
     async def record(
         self,

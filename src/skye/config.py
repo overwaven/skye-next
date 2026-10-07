@@ -143,6 +143,9 @@ class Settings(BaseSettings):
     skye_ops_max_body_bytes: int = Field(default=2_000_000, ge=10_000)
     # Public origin used to build webhook automation URLs.
     skye_web_origin: str | None = None
+    # Retail Sparks charged per 1 ₽ of provider-reported cost. The fallback
+    # catalog in ``pricing.py`` is used when a provider reports no cost.
+    skye_sparks_per_rub: float = Field(default=1.0, gt=0)
 
     @field_validator("skye_group_context_total_chars")
     @classmethod

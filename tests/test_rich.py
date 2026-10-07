@@ -5,7 +5,6 @@ from aiogram.exceptions import TelegramBadRequest
 from aiogram.types import (
     BufferedInputFile,
     Chat,
-    InputRichBlockDetails,
     InputRichBlockList,
     InputRichBlockParagraph,
     InputRichBlockSectionHeading,
@@ -479,25 +478,6 @@ async def test_edit_still_raises_other_bad_requests() -> None:
         await RichMessages(bot).edit(incoming, "Done.")
 
 
-def test_account_screen_shows_renewal_status() -> None:
-    message = RichMessages.account(
-        owner=False,
-        complimentary=False,
-        plan_name="Skye Plus",
-        status="18 days left. Renews automatically. Telegram Stars will be charged again "
-        "at the end of this period.",
-    )
-    assert message.blocks
-    heading = message.blocks[1]
-    status = message.blocks[2]
-    assert isinstance(heading, InputRichBlockSectionHeading)
-    assert heading.text == "Skye Plus"
-    assert isinstance(status, InputRichBlockParagraph)
-    assert "Terra" not in str(status.text)
-    assert "Luna" not in str(status.text)
-    assert "Renews automatically" in str(status.text)
-
-
 def test_onboarding_uses_a_native_rich_list() -> None:
     message = RichMessages.onboarding()
 
@@ -509,50 +489,36 @@ def test_onboarding_uses_a_native_rich_list() -> None:
     assert all(len(item.blocks) == 1 for item in suggestions.items)
 
 
-def test_free_account_uses_native_plan_lists() -> None:
-    message = RichMessages.account(
+def test_sparks_account_shows_balance_and_spend_state() -> None:
+    message = RichMessages.sparks_account(
+        balance=3500,
+        entries=[],
+        show_spend=True,
         owner=False,
-        complimentary=False,
-        plan_name=None,
-        status=None,
     )
-
-    lists = [block for block in message.blocks if isinstance(block, InputRichBlockList)]
-    assert len(lists) == 2
-    assert [len(block.items) for block in lists] == [2, 2]
-
-
-def test_plus_agents_prompt_points_to_account() -> None:
-    message = RichMessages.plus_agents()
-    assert message.blocks
-    heading = message.blocks[0]
-    body = message.blocks[1]
-    assert isinstance(heading, InputRichBlockSectionHeading)
-    assert heading.text == "Agents"
-    assert isinstance(body, InputRichBlockParagraph)
-    blob = str(body.text)
-    assert "Skye Plus" in blob
-    assert "/account" in blob
-    assert "token" not in blob.lower()
-    assert "Luna" not in blob
+    texts = [getattr(block, "text", "") for block in message.blocks]
+    joined = " ".join(str(text) for text in texts)
+    assert "3.5" in joined
+    assert "Spend display: On" in joined
 
 
-def test_plan_checkout_has_a_collapsed_plans_details_block() -> None:
-    message = RichMessages.plan_checkout(
-        name="Skye Plus",
-        emoji="🌙",
-        stars=449,
-        recurring=True,
+def test_sparks_group_explains_sponsorship() -> None:
+    message = RichMessages.sparks_group(
+        balance=0,
+        sponsor_id=None,
+        user_id=42,
+        owner=False,
     )
+    texts = [str(getattr(block, "text", "")) for block in message.blocks]
+    assert any("No sponsor" in text for text in texts)
+
+
+def test_topup_checkout_names_the_package() -> None:
+    message = RichMessages.topup_checkout(name="Starter", sparks=100, stars=79, bonus=0)
     assert message.blocks
     assert isinstance(message.blocks[0], InputRichBlockSectionHeading)
-    assert message.blocks[0].text == "🌙 Skye Plus"
-    details = message.blocks[-1]
-    assert isinstance(details, InputRichBlockDetails)
-    assert details.summary == "Plans"
-    assert details.is_open is not True
-    blob = str(details.blocks[0].text)
-    assert "more room for longer work" in blob.lower()
-    assert "your own agents" in blob.lower()
-    assert "Luna" not in blob
-    assert "token" not in blob.lower()
+    texts = [str(getattr(block, "text", "")) for block in message.blocks]
+    joined = " ".join(texts)
+    assert "100" in joined
+    assert "79 Telegram Stars" in joined
+    assert "token" not in joined.lower()

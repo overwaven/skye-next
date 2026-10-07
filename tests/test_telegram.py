@@ -124,13 +124,13 @@ def _private_message() -> Message:
     )
 
 
-async def test_free_user_sees_plus_prompt_when_adding_an_agent() -> None:
+async def test_banned_user_cannot_add_an_agent() -> None:
     app = telegram_app()
     app.access = SimpleNamespace(
         allowed=AsyncMock(return_value=True),
-        plus=AsyncMock(return_value=False),
+        banned=AsyncMock(return_value=True),
     )
-    app.rich = SimpleNamespace(send=AsyncMock(), plus_agents=RichMessages.plus_agents)
+    app.rich = SimpleNamespace(send=AsyncMock())
     app._can_edit = AsyncMock(return_value=True)  # type: ignore[method-assign]
     callback = SimpleNamespace(
         message=_private_message(),
@@ -145,10 +145,6 @@ async def test_free_user_sees_plus_prompt_when_adding_an_agent() -> None:
     state.set_state.assert_not_awaited()
     callback.answer.assert_awaited()
     app.rich.send.assert_awaited_once()
-    blob = str(app.rich.send.await_args.args[1])
-    assert "Skye Plus" in blob
-    assert "/account" in blob
-    assert "token" not in blob.lower()
 
 
 async def test_free_user_can_open_agents_list() -> None:
@@ -215,7 +211,7 @@ async def test_group_without_plus_admin_points_to_private_account() -> None:
 
     assert await app._require_access(incoming, context) is False
     app.rich.send.assert_awaited_once_with(incoming, GROUP_NEEDS_PLUS)
-    assert "Skye Plus" in GROUP_NEEDS_PLUS
+    assert "sponsor" in GROUP_NEEDS_PLUS.lower()
     assert "/account" in GROUP_NEEDS_PLUS
     assert "token" not in GROUP_NEEDS_PLUS.lower()
 
@@ -543,8 +539,17 @@ async def test_stream_turn_posts_send_message_bubbles_not_final_output() -> None
             return RunOutput("HIDDEN leftover", (), sent=2)
 
     app = telegram_app()
-    app.access = SimpleNamespace(billed_user_id=AsyncMock(return_value=1))
-    app.quota = SimpleNamespace(check=AsyncMock(), record=AsyncMock())
+    app.sparks = SimpleNamespace(
+        payer=AsyncMock(return_value=1),
+        can_afford=AsyncMock(return_value=True),
+        cost_milli=AsyncMock(return_value=0),
+        charge=AsyncMock(return_value=True),
+    )
+    app.quota = SimpleNamespace(
+        complimentary=AsyncMock(return_value=False),
+        exhausted=AsyncMock(return_value=False),
+        record=AsyncMock(),
+    )
     app.runtime = ReplyRuntime()  # type: ignore[assignment]
     app.database = SimpleNamespace(
         get_settings=AsyncMock(return_value=ChatSettings("gpt-5.6-luna", "medium"))
@@ -602,8 +607,17 @@ async def test_stream_turn_can_send_during_a_tool_run() -> None:
             return RunOutput("hidden", (), sent=2)
 
     app = telegram_app()
-    app.access = SimpleNamespace(billed_user_id=AsyncMock(return_value=1))
-    app.quota = SimpleNamespace(check=AsyncMock(), record=AsyncMock())
+    app.sparks = SimpleNamespace(
+        payer=AsyncMock(return_value=1),
+        can_afford=AsyncMock(return_value=True),
+        cost_milli=AsyncMock(return_value=0),
+        charge=AsyncMock(return_value=True),
+    )
+    app.quota = SimpleNamespace(
+        complimentary=AsyncMock(return_value=False),
+        exhausted=AsyncMock(return_value=False),
+        record=AsyncMock(),
+    )
     app.runtime = WorkingRuntime()  # type: ignore[assignment]
     app.database = SimpleNamespace(
         get_settings=AsyncMock(return_value=ChatSettings("gpt-5.6-luna", "medium"))
@@ -724,8 +738,17 @@ async def test_stream_turn_passes_reply_to_through_send_message() -> None:
             return RunOutput("HIDDEN leftover", (), sent=2)
 
     app = telegram_app()
-    app.access = SimpleNamespace(billed_user_id=AsyncMock(return_value=1))
-    app.quota = SimpleNamespace(check=AsyncMock(), record=AsyncMock())
+    app.sparks = SimpleNamespace(
+        payer=AsyncMock(return_value=1),
+        can_afford=AsyncMock(return_value=True),
+        cost_milli=AsyncMock(return_value=0),
+        charge=AsyncMock(return_value=True),
+    )
+    app.quota = SimpleNamespace(
+        complimentary=AsyncMock(return_value=False),
+        exhausted=AsyncMock(return_value=False),
+        record=AsyncMock(),
+    )
     app.runtime = QuoteRuntime()  # type: ignore[assignment]
     app.database = SimpleNamespace(
         get_settings=AsyncMock(return_value=ChatSettings("gpt-5.6-luna", "medium"))
@@ -769,8 +792,17 @@ async def test_stream_turn_sends_standalone_and_quoted_voice_messages() -> None:
             return RunOutput("HIDDEN leftover", (), sent=2)
 
     app = telegram_app()
-    app.access = SimpleNamespace(billed_user_id=AsyncMock(return_value=1))
-    app.quota = SimpleNamespace(check=AsyncMock(), record=AsyncMock())
+    app.sparks = SimpleNamespace(
+        payer=AsyncMock(return_value=1),
+        can_afford=AsyncMock(return_value=True),
+        cost_milli=AsyncMock(return_value=0),
+        charge=AsyncMock(return_value=True),
+    )
+    app.quota = SimpleNamespace(
+        complimentary=AsyncMock(return_value=False),
+        exhausted=AsyncMock(return_value=False),
+        record=AsyncMock(),
+    )
     app.runtime = VoiceRuntime()  # type: ignore[assignment]
     app.database = SimpleNamespace(
         get_settings=AsyncMock(return_value=ChatSettings("gpt-5.6-luna", "medium"))
@@ -816,8 +848,17 @@ async def test_hidden_turn_stays_quiet_without_send_message_or_media() -> None:
             return RunOutput("nothing to say", (), sent=0)
 
     app = telegram_app()
-    app.access = SimpleNamespace(billed_user_id=AsyncMock(return_value=1))
-    app.quota = SimpleNamespace(check=AsyncMock(), record=AsyncMock())
+    app.sparks = SimpleNamespace(
+        payer=AsyncMock(return_value=1),
+        can_afford=AsyncMock(return_value=True),
+        cost_milli=AsyncMock(return_value=0),
+        charge=AsyncMock(return_value=True),
+    )
+    app.quota = SimpleNamespace(
+        complimentary=AsyncMock(return_value=False),
+        exhausted=AsyncMock(return_value=False),
+        record=AsyncMock(),
+    )
     app.runtime = QuietRuntime()  # type: ignore[assignment]
     app.database = SimpleNamespace(
         get_settings=AsyncMock(return_value=ChatSettings("gpt-5.6-luna", "medium"))

@@ -32,13 +32,12 @@ from .models import (
     MediaGroupItem,
     Memory,
     MemoryCategory,
-    PlanId,
     ProjectKind,
     Scope,
     ScopeKind,
     Skill,
-    StarEntitlement,
     TelegramProject,
+    WalletEntry,
 )
 
 SCHEMA = """
@@ -58,6 +57,7 @@ CREATE TABLE IF NOT EXISTS user_settings (
     memory_enabled INTEGER NOT NULL DEFAULT 1,
     active_agent_id TEXT,
     active_telegram_project_id TEXT,
+    sparks_display INTEGER NOT NULL DEFAULT 1,
     updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 
@@ -67,6 +67,7 @@ CREATE TABLE IF NOT EXISTS chat_settings (
     reasoning TEXT NOT NULL,
     memory_enabled INTEGER NOT NULL DEFAULT 1,
     active_agent_id TEXT,
+    sparks_display INTEGER NOT NULL DEFAULT 1,
     updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 
@@ -325,29 +326,6 @@ CREATE TRIGGER IF NOT EXISTS memories_au AFTER UPDATE ON memories BEGIN
     VALUES (new.id, new.content, new.category);
 END;
 
-CREATE TABLE IF NOT EXISTS star_entitlements (
-    user_id INTEGER PRIMARY KEY,
-    plan TEXT NOT NULL CHECK (plan IN ('trial', 'plus', 'super', 'ultra')),
-    auto_renew INTEGER NOT NULL DEFAULT 0,
-    expires_at INTEGER NOT NULL,
-    telegram_payment_charge_id TEXT,
-    trial_used INTEGER NOT NULL DEFAULT 0,
-    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
-);
-
-CREATE TABLE IF NOT EXISTS star_payments (
-    telegram_payment_charge_id TEXT PRIMARY KEY,
-    user_id INTEGER NOT NULL,
-    plan TEXT NOT NULL CHECK (plan IN ('trial', 'plus', 'super', 'ultra')),
-    stars INTEGER NOT NULL,
-    invoice_payload TEXT NOT NULL,
-    is_recurring INTEGER NOT NULL DEFAULT 0,
-    is_first_recurring INTEGER NOT NULL DEFAULT 0,
-    subscription_expiration_date INTEGER,
-    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
-);
-
 CREATE TABLE IF NOT EXISTS usage_counters (
     user_id INTEGER PRIMARY KEY,
     day_utc TEXT NOT NULL,
@@ -369,7 +347,36 @@ CREATE TABLE IF NOT EXISTS product_events (
 CREATE INDEX IF NOT EXISTS product_events_user
 ON product_events(user_id, name, occurred_at);
 
-CREATE TABLE IF NOT EXISTS group_plus_payers (
+CREATE TABLE IF NOT EXISTS wallets (
+    user_id INTEGER PRIMARY KEY,
+    balance_milli INTEGER NOT NULL DEFAULT 0,
+    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS wallet_ledger (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id INTEGER NOT NULL,
+    delta_milli INTEGER NOT NULL,
+    kind TEXT NOT NULL CHECK (kind IN ('topup', 'spend', 'bonus', 'adjust', 'refund')),
+    reason TEXT NOT NULL DEFAULT '',
+    reference TEXT,
+    provider_cost_rub REAL,
+    detail TEXT,
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX IF NOT EXISTS wallet_ledger_user ON wallet_ledger(user_id, id);
+
+CREATE TABLE IF NOT EXISTS spark_topups (
+    telegram_payment_charge_id TEXT PRIMARY KEY,
+    user_id INTEGER NOT NULL,
+    package_id TEXT NOT NULL,
+    stars INTEGER NOT NULL,
+    sparks_milli INTEGER NOT NULL,
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS chat_sponsors (
     chat_id INTEGER PRIMARY KEY,
     user_id INTEGER NOT NULL,
     updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
@@ -436,6 +443,12 @@ class Database:
         )
         await self._ensure_column("user_settings", "active_telegram_project_id", "TEXT")
         await self._ensure_column("automations", "once", "INTEGER NOT NULL DEFAULT 0")
+        await self._ensure_column(
+            "user_settings", "sparks_display", "INTEGER NOT NULL DEFAULT 1"
+        )
+        await self._ensure_column(
+            "chat_settings", "sparks_display", "INTEGER NOT NULL DEFAULT 1"
+        )
         await self._normalize_group_message_threads()
         await self._migrate_composio_sessions()
         await self.connection.commit()
@@ -618,147 +631,147 @@ class Database:
             for row in await cursor.fetchall()
         ]
 
-    async def star_entitlement(self, user_id: int) -> StarEntitlement | None:
+    async def wallet_balance(self, user_id: int) -> int:
         cursor = await self.conn.execute(
-            """SELECT user_id, plan, auto_renew, expires_at, telegram_payment_charge_id,
-                      trial_used, created_at, updated_at
-               FROM star_entitlements WHERE user_id = ?""",
-            (user_id,),
+            "SELECT balance_milli FROM wallets WHERE user_id = ?", (user_id,)
         )
         row = await cursor.fetchone()
-        return None if row is None else self._star_entitlement(row)
+        return int(row["balance_milli"]) if row else 0
 
-    async def active_entitlement(
-        self, user_id: int, *, now: int | None = None
-    ) -> StarEntitlement | None:
-        current = await self.star_entitlement(user_id)
-        if current is None or not current.active(int(time.time()) if now is None else now):
-            return None
-        return current
+    async def credit_wallet(
+        self,
+        user_id: int,
+        milli: int,
+        *,
+        kind: str = "topup",
+        reason: str = "",
+        reference: str | None = None,
+        provider_cost_rub: float | None = None,
+        detail: str | None = None,
+    ) -> int:
+        if milli <= 0:
+            raise ValueError("Credit must be positive.")
+        async with self.transaction() as connection:
+            await connection.execute(
+                """INSERT INTO wallets (user_id, balance_milli)
+                   VALUES (?, ?)
+                   ON CONFLICT(user_id) DO UPDATE SET
+                       balance_milli = wallets.balance_milli + excluded.balance_milli,
+                       updated_at = CURRENT_TIMESTAMP""",
+                (user_id, milli),
+            )
+            await connection.execute(
+                """INSERT INTO wallet_ledger (
+                       user_id, delta_milli, kind, reason, reference,
+                       provider_cost_rub, detail
+                   ) VALUES (?, ?, ?, ?, ?, ?, ?)""",
+                (user_id, milli, kind, reason, reference, provider_cost_rub, detail),
+            )
+            cursor = await connection.execute(
+                "SELECT balance_milli FROM wallets WHERE user_id = ?", (user_id,)
+            )
+            row = await cursor.fetchone()
+        return int(row["balance_milli"]) if row else milli
 
-    async def star_trial_used(self, user_id: int) -> bool:
-        current = await self.star_entitlement(user_id)
-        return bool(current and current.trial_used)
+    async def debit_wallet(
+        self,
+        user_id: int,
+        milli: int,
+        *,
+        kind: str = "spend",
+        reason: str = "",
+        reference: str | None = None,
+        provider_cost_rub: float | None = None,
+        detail: str | None = None,
+    ) -> bool:
+        if milli <= 0:
+            return True
+        async with self.transaction() as connection:
+            cursor = await connection.execute(
+                """UPDATE wallets
+                   SET balance_milli = balance_milli - ?, updated_at = CURRENT_TIMESTAMP
+                   WHERE user_id = ? AND balance_milli >= ?""",
+                (milli, user_id, milli),
+            )
+            if cursor.rowcount == 0:
+                return False
+            await connection.execute(
+                """INSERT INTO wallet_ledger (
+                       user_id, delta_milli, kind, reason, reference,
+                       provider_cost_rub, detail
+                   ) VALUES (?, ?, ?, ?, ?, ?, ?)""",
+                (user_id, -milli, kind, reason, reference, provider_cost_rub, detail),
+            )
+        return True
 
-    async def record_star_payment(
+    async def wallet_ledger(self, user_id: int, *, limit: int = 10) -> list[WalletEntry]:
+        cursor = await self.conn.execute(
+            """SELECT id, user_id, delta_milli, kind, reason, reference,
+                      provider_cost_rub, detail, created_at
+               FROM wallet_ledger WHERE user_id = ?
+               ORDER BY id DESC LIMIT ?""",
+            (user_id, limit),
+        )
+        return [self._wallet_entry(row) for row in await cursor.fetchall()]
+
+    @staticmethod
+    def _wallet_entry(row: aiosqlite.Row) -> WalletEntry:
+        raw_cost = row["provider_cost_rub"]
+        return WalletEntry(
+            id=int(row["id"]),
+            user_id=int(row["user_id"]),
+            delta_milli=int(row["delta_milli"]),
+            kind=str(row["kind"]),
+            reason=str(row["reason"]),
+            reference=cast(str | None, row["reference"]),
+            provider_cost_rub=None if raw_cost is None else float(raw_cost),
+            detail=cast(str | None, row["detail"]),
+            created_at=str(row["created_at"]),
+        )
+
+    async def record_spark_topup(
         self,
         *,
         telegram_payment_charge_id: str,
         user_id: int,
-        plan: PlanId,
+        package_id: str,
         stars: int,
-        invoice_payload: str,
-        is_recurring: bool,
-        is_first_recurring: bool,
-        subscription_expiration_date: int | None,
+        sparks_milli: int,
     ) -> bool:
         cursor = await self._write(
-            """INSERT OR IGNORE INTO star_payments (
-                   telegram_payment_charge_id, user_id, plan, stars, invoice_payload,
-                   is_recurring, is_first_recurring, subscription_expiration_date
-               ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
-            (
-                telegram_payment_charge_id,
-                user_id,
-                plan,
-                stars,
-                invoice_payload,
-                int(is_recurring),
-                int(is_first_recurring),
-                subscription_expiration_date,
-            ),
+            """INSERT OR IGNORE INTO spark_topups (
+                   telegram_payment_charge_id, user_id, package_id, stars, sparks_milli
+               ) VALUES (?, ?, ?, ?, ?)""",
+            (telegram_payment_charge_id, user_id, package_id, stars, sparks_milli),
         )
         return cursor.rowcount > 0
 
-    async def star_payment(self, telegram_payment_charge_id: str) -> tuple[int, PlanId] | None:
+    async def spark_topup(self, telegram_payment_charge_id: str) -> bool:
         cursor = await self.conn.execute(
-            "SELECT user_id, plan FROM star_payments WHERE telegram_payment_charge_id = ?",
+            "SELECT 1 FROM spark_topups WHERE telegram_payment_charge_id = ?",
             (telegram_payment_charge_id,),
         )
-        row = await cursor.fetchone()
-        if row is None:
-            return None
-        return int(row["user_id"]), cast(PlanId, row["plan"])
+        return await cursor.fetchone() is not None
 
-    async def upsert_star_entitlement(
-        self,
-        *,
-        user_id: int,
-        plan: PlanId,
-        auto_renew: bool,
-        expires_at: int,
-        telegram_payment_charge_id: str | None,
-        trial_used: bool,
-    ) -> StarEntitlement:
-        await self._write(
-            """INSERT INTO star_entitlements (
-                   user_id, plan, auto_renew, expires_at, telegram_payment_charge_id, trial_used
-               ) VALUES (?, ?, ?, ?, ?, ?)
-               ON CONFLICT(user_id) DO UPDATE SET
-                   plan = excluded.plan,
-                   auto_renew = excluded.auto_renew,
-                   expires_at = excluded.expires_at,
-                   telegram_payment_charge_id = excluded.telegram_payment_charge_id,
-                   trial_used = MAX(star_entitlements.trial_used, excluded.trial_used),
-                   updated_at = CURRENT_TIMESTAMP""",
-            (
-                user_id,
-                plan,
-                int(auto_renew),
-                expires_at,
-                telegram_payment_charge_id,
-                int(trial_used),
-            ),
-        )
-        current = await self.star_entitlement(user_id)
-        if current is None:
-            raise RuntimeError("Star entitlement was not saved.")
-        return current
-
-    async def extend_star_entitlement(self, user_id: int, expires_at: int) -> StarEntitlement:
-        await self._write(
-            """UPDATE star_entitlements
-               SET expires_at = ?, updated_at = CURRENT_TIMESTAMP
-               WHERE user_id = ?""",
-            (expires_at, user_id),
-        )
-        current = await self.star_entitlement(user_id)
-        if current is None:
-            raise RuntimeError("Star entitlement was not saved.")
-        return current
-
-    async def set_star_auto_renew(self, user_id: int, auto_renew: bool) -> StarEntitlement:
-        await self._write(
-            """UPDATE star_entitlements
-               SET auto_renew = ?, updated_at = CURRENT_TIMESTAMP
-               WHERE user_id = ?""",
-            (int(auto_renew), user_id),
-        )
-        current = await self.star_entitlement(user_id)
-        if current is None:
-            raise RuntimeError("Star entitlement was not saved.")
-        return current
-
-    async def group_plus_payer(self, chat_id: int) -> int | None:
+    async def chat_sponsor(self, chat_id: int) -> int | None:
         cursor = await self.conn.execute(
-            "SELECT user_id FROM group_plus_payers WHERE chat_id = ?",
-            (chat_id,),
+            "SELECT user_id FROM chat_sponsors WHERE chat_id = ?", (chat_id,)
         )
         row = await cursor.fetchone()
         return int(row["user_id"]) if row else None
 
-    async def set_group_plus_payer(self, chat_id: int, user_id: int | None) -> None:
-        if user_id is None:
-            await self._write("DELETE FROM group_plus_payers WHERE chat_id = ?", (chat_id,))
-            return
+    async def set_chat_sponsor(self, chat_id: int, user_id: int) -> None:
         await self._write(
-            """INSERT INTO group_plus_payers (chat_id, user_id)
+            """INSERT INTO chat_sponsors (chat_id, user_id)
                VALUES (?, ?)
                ON CONFLICT(chat_id) DO UPDATE SET
                    user_id = excluded.user_id,
                    updated_at = CURRENT_TIMESTAMP""",
             (chat_id, user_id),
         )
+
+    async def clear_chat_sponsor(self, chat_id: int) -> None:
+        await self._write("DELETE FROM chat_sponsors WHERE chat_id = ?", (chat_id,))
 
     async def usage_totals(
         self, user_id: int, *, now: datetime | None = None
@@ -850,17 +863,17 @@ class Database:
             return 0, 0, False
         return int(row["tasks"]), int(row["active_days"]), bool(row["rich_capability"])
 
-    async def grant_earned_trial(self, user_id: int, now: int, duration: int) -> bool:
+
+    async def grant_activation_bonus(self, user_id: int, milli: int, now: int) -> bool:
+        """Credit a one-time Sparks bonus once a user has genuinely activated."""
+
         async with self.transaction() as connection:
             cursor = await connection.execute(
-                """SELECT expires_at, trial_used
-                   FROM star_entitlements WHERE user_id = ?""",
+                """SELECT 1 FROM wallet_ledger
+                   WHERE user_id = ? AND kind = 'bonus' AND reason = 'activation'""",
                 (user_id,),
             )
-            entitlement = await cursor.fetchone()
-            if entitlement is not None and (
-                int(entitlement["expires_at"]) > now or bool(entitlement["trial_used"])
-            ):
+            if await cursor.fetchone() is not None:
                 return False
             cursor = await connection.execute(
                 """SELECT COUNT(*) AS tasks,
@@ -879,52 +892,29 @@ class Database:
             ):
                 return False
             await connection.execute(
-                """INSERT INTO star_entitlements (
-                       user_id, plan, auto_renew, expires_at,
-                       telegram_payment_charge_id, trial_used
-                   ) VALUES (?, 'trial', 0, ?, NULL, 1)
+                """INSERT INTO wallets (user_id, balance_milli)
+                   VALUES (?, ?)
                    ON CONFLICT(user_id) DO UPDATE SET
-                       plan = 'trial',
-                       auto_renew = 0,
-                       expires_at = excluded.expires_at,
-                       telegram_payment_charge_id = NULL,
-                       trial_used = 1,
+                       balance_milli = wallets.balance_milli + excluded.balance_milli,
                        updated_at = CURRENT_TIMESTAMP""",
-                (user_id, now + duration),
+                (user_id, milli),
+            )
+            await connection.execute(
+                """INSERT INTO wallet_ledger (user_id, delta_milli, kind, reason)
+                   VALUES (?, ?, 'bonus', 'activation')""",
+                (user_id, milli),
             )
             await connection.execute(
                 """INSERT INTO product_events (user_id, name, occurred_at)
-                   VALUES (?, 'trial_started', ?)""",
+                   VALUES (?, 'bonus_granted', ?)""",
                 (user_id, now),
             )
         return True
 
-    async def expire_star_entitlement(self, user_id: int, now: int) -> StarEntitlement | None:
-        await self._write(
-            """UPDATE star_entitlements
-               SET auto_renew = 0, expires_at = ?, updated_at = CURRENT_TIMESTAMP
-               WHERE user_id = ?""",
-            (now, user_id),
-        )
-        return await self.star_entitlement(user_id)
-
-    @staticmethod
-    def _star_entitlement(row: aiosqlite.Row) -> StarEntitlement:
-        return StarEntitlement(
-            user_id=int(row["user_id"]),
-            plan=cast(PlanId, row["plan"]),
-            auto_renew=bool(row["auto_renew"]),
-            expires_at=int(row["expires_at"]),
-            telegram_payment_charge_id=cast(str | None, row["telegram_payment_charge_id"]),
-            trial_used=bool(row["trial_used"]),
-            created_at=str(row["created_at"]),
-            updated_at=str(row["updated_at"]),
-        )
-
     async def get_settings(self, scope: Scope) -> ChatSettings:
         table, key = self._settings_table(scope)
         cursor = await self.conn.execute(
-            f"""SELECT model, reasoning, memory_enabled, active_agent_id
+            f"""SELECT model, reasoning, memory_enabled, active_agent_id, sparks_display
                 FROM {table} WHERE {key} = ?""",
             (scope.id,),
         )
@@ -936,12 +926,17 @@ class Database:
             cast(Reasoning, row["reasoning"]),
             bool(row["memory_enabled"]),
             cast(str | None, row["active_agent_id"]),
+            bool(row["sparks_display"]),
         )
 
     async def set_model(self, scope: Scope, model: ModelId) -> ChatSettings:
         current = await self.get_settings(scope)
         result = ChatSettings(
-            model, current.reasoning, current.memory_enabled, current.active_agent_id
+            model,
+            current.reasoning,
+            current.memory_enabled,
+            current.active_agent_id,
+            current.sparks_display,
         )
         await self._set_settings(scope, result)
         return result
@@ -949,33 +944,63 @@ class Database:
     async def set_reasoning(self, scope: Scope, reasoning: Reasoning) -> ChatSettings:
         current = await self.get_settings(scope)
         result = ChatSettings(
-            current.model, reasoning, current.memory_enabled, current.active_agent_id
+            current.model,
+            reasoning,
+            current.memory_enabled,
+            current.active_agent_id,
+            current.sparks_display,
         )
         await self._set_settings(scope, result)
         return result
 
     async def set_memory_enabled(self, scope: Scope, enabled: bool) -> ChatSettings:
         current = await self.get_settings(scope)
-        result = ChatSettings(current.model, current.reasoning, enabled, current.active_agent_id)
+        result = ChatSettings(
+            current.model,
+            current.reasoning,
+            enabled,
+            current.active_agent_id,
+            current.sparks_display,
+        )
         await self._set_settings(scope, result)
         return result
 
     async def set_active_agent(self, scope: Scope, agent_id: str | None) -> ChatSettings:
         current = await self.get_settings(scope)
-        result = ChatSettings(current.model, current.reasoning, current.memory_enabled, agent_id)
+        result = ChatSettings(
+            current.model,
+            current.reasoning,
+            current.memory_enabled,
+            agent_id,
+            current.sparks_display,
+        )
+        await self._set_settings(scope, result)
+        return result
+
+    async def set_sparks_display(self, scope: Scope, enabled: bool) -> ChatSettings:
+        current = await self.get_settings(scope)
+        result = ChatSettings(
+            current.model,
+            current.reasoning,
+            current.memory_enabled,
+            current.active_agent_id,
+            enabled,
+        )
         await self._set_settings(scope, result)
         return result
 
     async def _set_settings(self, scope: Scope, settings: ChatSettings) -> None:
         table, key = self._settings_table(scope)
         await self._write(
-            f"""INSERT INTO {table} ({key}, model, reasoning, memory_enabled, active_agent_id)
-                VALUES (?, ?, ?, ?, ?)
+            f"""INSERT INTO {table} (
+                    {key}, model, reasoning, memory_enabled, active_agent_id, sparks_display
+                ) VALUES (?, ?, ?, ?, ?, ?)
                 ON CONFLICT({key}) DO UPDATE SET
                     model = excluded.model,
                     reasoning = excluded.reasoning,
                     memory_enabled = excluded.memory_enabled,
                     active_agent_id = excluded.active_agent_id,
+                    sparks_display = excluded.sparks_display,
                     updated_at = CURRENT_TIMESTAMP""",
             (
                 scope.id,
@@ -983,6 +1008,7 @@ class Database:
                 settings.reasoning,
                 settings.memory_enabled,
                 settings.active_agent_id,
+                settings.sparks_display,
             ),
         )
 

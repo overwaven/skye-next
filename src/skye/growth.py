@@ -5,8 +5,9 @@ import time
 from dataclasses import dataclass
 
 from .db import Database
+from .pricing import SPARK_SCALE
 
-TRIAL_SECONDS = 7 * 86_400
+ACTIVATION_BONUS = 50 * SPARK_SCALE
 SOURCE_PATTERN = re.compile(r"(?:src|ref)_([A-Za-z0-9_-]{1,48})\Z")
 
 
@@ -43,7 +44,7 @@ class GrowthService:
             capability=capability,
             occurred_at=now,
         )
-        return await self.database.grant_earned_trial(user_id, now, TRIAL_SECONDS)
+        return await self.database.grant_activation_bonus(user_id, ACTIVATION_BONUS, now)
 
     async def progress(self, user_id: int) -> ActivationProgress:
         tasks, active_days, rich = await self.database.activation_progress(user_id)
