@@ -1,10 +1,11 @@
 """Provider-agnostic pricing: turn token and image usage into Sparks.
 
-Prices live here as data, keyed by model id, so switching model providers is a
-catalog edit rather than a code change. When a provider reports the real cost of
-a request (Selectel AI Router returns ``usage.cost`` in rubles), that value wins
-and is converted through :attr:`PricingService.sparks_per_rub`; without it we
-fall back to this catalog.
+Prices are the provider's raw cost in rubles, keyed by model id, so switching
+providers is a catalog edit rather than a code change. When a provider reports
+the real cost of a request (Selectel AI Router returns ``usage.cost`` in
+rubles), that value wins; otherwise the catalog is used. Either way the ruble
+cost is turned into Sparks through :attr:`PricingService.sparks_per_rub`, the
+retail multiplier that carries the margin.
 """
 
 from __future__ import annotations
@@ -18,7 +19,7 @@ SPARK_SCALE = 1000
 
 @dataclass(frozen=True, slots=True)
 class ModelPrice:
-    """Retail Sparks per one million tokens."""
+    """Provider cost in rubles per one million tokens."""
 
     input_per_million: float
     output_per_million: float
@@ -43,32 +44,31 @@ class TurnUsage:
         return self.input_tokens + self.output_tokens
 
 
-# A deliberately small default catalog. Operators tune these against the
-# provider's live prices; unknown models fall back to DEFAULT_MODEL_PRICE.
+# Selectel AI Router prices, in rubles. Unknown models fall back to
+# DEFAULT_MODEL_PRICE. Update these when the provider's prices change.
 DEFAULT_MODEL_PRICE = ModelPrice(
-    input_per_million=1.0,
-    output_per_million=3.0,
-    cached_input_per_million=0.25,
+    input_per_million=11.54,
+    output_per_million=23.07,
+    cached_input_per_million=2.31,
 )
 
 MODEL_PRICES: dict[str, ModelPrice] = {
-    "gpt-5.6-luna": ModelPrice(
-        input_per_million=1.0, output_per_million=4.0, cached_input_per_million=0.25
-    ),
     "deepseek/deepseek-v4.1-flash": ModelPrice(
-        input_per_million=0.3, output_per_million=1.2, cached_input_per_million=0.06
+        input_per_million=11.54, output_per_million=23.07, cached_input_per_million=2.31
+    ),
+    "deepseek-v4.1-flash": ModelPrice(
+        input_per_million=11.54, output_per_million=23.07, cached_input_per_million=2.31
+    ),
+    "gpt-5.6-luna": ModelPrice(
+        input_per_million=11.54, output_per_million=23.07, cached_input_per_million=2.31
     ),
 }
 
-DEFAULT_IMAGE_PRICE = 30.0
+DEFAULT_IMAGE_PRICE = 5.26
 
 IMAGE_PRICES: dict[str, float] = {
-    "gpt-image-2": 40.0,
-    "gpt-image-2.5": 40.0,
-    "openai/gpt-image-2.5/flare/text-to-image": 40.0,
-    "openai/gpt-image-2.5/flare/edit": 40.0,
-    "microsoft/mai-image-2.6": 25.0,
-    "recraft-v4.1-flash": 15.0,
+    "black-forest-labs/flux-3-image": 5.26,
+    "flux-3-image": 5.26,
 }
 
 
@@ -96,14 +96,11 @@ class PricingService:
             return self.image_prices[model]
         return DEFAULT_IMAGE_PRICE
 
-    def sparks(self, usage: TurnUsage, *, provider_cost_rub: float | None = None) -> float:
-        """Retail Sparks for one run, before rounding to milli-Sparks.
+    def cost_rub(self, usage: TurnUsage, *, provider_cost_rub: float | None = None) -> float:
+        """Raw provider cost in rubles. A reported cost wins over the catalog."""
 
-        A provider-reported cost, when present, is the source of truth; the
-        catalog is only the fallback.
-        """
         if provider_cost_rub is not None and provider_cost_rub > 0:
-            return provider_cost_rub * self.sparks_per_rub
+            return provider_cost_rub
         price = self.model_price(usage.model)
         total = (
             usage.input_tokens / 1_000_000 * price.input_per_million
@@ -113,11 +110,16 @@ class PricingService:
         total += usage.images * self.image_price(usage.image_model)
         return max(total, 0.0)
 
+    def sparks(self, usage: TurnUsage, *, provider_cost_rub: float | None = None) -> float:
+        """Retail Sparks for one run, before rounding to milli-Sparks."""
+
+        return self.cost_rub(usage, provider_cost_rub=provider_cost_rub) * self.sparks_per_rub
+
     def milli(self, usage: TurnUsage, *, provider_cost_rub: float | None = None) -> int:
         """Sparks charged for a run, in integer milli-Sparks.
 
-        Any non-zero usage costs at least one milli-Spark so a run is never
-        silently free when it did work.
+        Any non-zero cost is at least one milli-Spark so a run is never silently
+        free when it did work.
         """
         sparks = self.sparks(usage, provider_cost_rub=provider_cost_rub)
         if sparks <= 0:

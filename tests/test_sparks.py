@@ -4,7 +4,7 @@ import pytest
 
 from skye.db import Database
 from skye.models import RequestContext
-from skye.pricing import SPARK_SCALE, PricingService, TurnUsage
+from skye.pricing import SPARK_SCALE, ModelPrice, PricingService, TurnUsage
 from skye.sparks import SparkError, SparkService, format_milli
 
 
@@ -70,6 +70,12 @@ async def test_payer_is_speaker_unless_sponsored(database: Database, wallet: Spa
     assert await wallet.payer(private) == 42
 
 
-async def test_cost_milli_uses_pricing(wallet: SparkService) -> None:
-    usage = TurnUsage(model="gpt-5.6-luna", input_tokens=1_000_000)
+async def test_cost_milli_uses_pricing(database: Database) -> None:
+    wallet = SparkService(
+        database,
+        PricingService(
+            model_prices={"x": ModelPrice(input_per_million=1.0, output_per_million=1.0)}
+        ),
+    )
+    usage = TurnUsage(model="x", input_tokens=1_000_000)
     assert wallet.cost_milli(usage) == SPARK_SCALE
