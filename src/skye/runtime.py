@@ -1143,7 +1143,7 @@ class AgentRuntime:
             for image in images:
                 await on_event(RunEvent(kind="image", image=image))
         details = _usage_details(
-            result, images=len(images), image_model=self.config.skye_image_model
+            result, images=len(images), image_model=self._image_model()
         )
         usage = details.total_tokens
         if usage <= 0:
@@ -1427,6 +1427,13 @@ class AgentRuntime:
             parallel_tool_calls=False if image_tool_calls is not None else None,
             extra_body={"safety_identifier": safety_id},
         )
+
+    def _image_model(self) -> str:
+        """The image model actually rendering this turn, for pricing."""
+
+        if self.config.images_on_fal:
+            return self.config.skye_fal_image_model
+        return self.config.skye_image_model
 
     @staticmethod
     def _query(user_input: str | list[TResponseInputItem]) -> str:

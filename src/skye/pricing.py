@@ -70,6 +70,10 @@ DEFAULT_IMAGE_PRICE = 5.26
 IMAGE_PRICES: dict[str, float] = {
     "black-forest-labs/flux-3-image": 5.26,
     "flux-3-image": 5.26,
+    # fal endpoints used when images run on fal; fal bills per image and reports
+    # no cost in the response, so these are the retail cost basis.
+    "openai/gpt-image-2.5/flare/text-to-image": 5.26,
+    "openai/gpt-image-2.5/flare/edit": 5.26,
 }
 
 # A connector tool call is billed at a flat rate: Composio charges per call and
