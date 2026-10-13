@@ -14,6 +14,7 @@ from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import AsyncExitStack, asynccontextmanager, suppress
 from dataclasses import dataclass, field, replace
 from typing import Any, cast
+from uuid import uuid4
 
 import structlog
 from agents import (
@@ -58,7 +59,6 @@ from .exa import ExaService
 from .images import ImageProvider, TurnImages, turn_sources
 from .memory import MemoryService
 from .models import AgentCapability, ChatSettings, InstalledAgent, RequestContext, Skill
-from .ops_capture import OpsContext, bind_context, clear_context, new_run_id
 from .pricing import TurnUsage
 from .sandbox import SandboxService, ScopeSandbox, turn_files
 from .sessions import DatabaseSession, without_inline_payloads
@@ -739,19 +739,20 @@ class AgentRuntime:
         )
         _ = on_text
         tpt = "telegram"
-        label = f"Chat {context.chat_id}"
+        input_chars, input_attachments = _input_metadata(user_input)
         async with self._locks[key]:
-            ops_token = bind_context(
-                OpsContext(
-                    run_id=new_run_id(),
-                    run_key=key,
-                    transport=tpt,
-                    label=label,
-                    chat_id=context.chat_id,
-                    user_id=context.user_id,
-                    thread_id=context.thread_id,
-                )
+            run_id = uuid4().hex
+            # Tag every log line inside the run — ours and the libraries' — with
+            # who it belongs to. Dozzle groups and queries on these fields.
+            ctx_tokens = structlog.contextvars.bind_contextvars(
+                run_id=run_id,
+                run_key=key,
+                transport=tpt,
+                chat_id=context.chat_id,
+                user_id=context.user_id,
+                thread_id=context.thread_id,
             )
+            started_turn = time.monotonic()
             active = _ActiveRun()
             self._active[key] = active
             turn_sandbox: ScopeSandbox | None = None
@@ -832,6 +833,14 @@ class AgentRuntime:
                     if active.cancel.is_set():
                         raise asyncio.CancelledError
                     async with asyncio.timeout(self.config.skye_run_timeout_seconds):
+                        log.info(
+                            "turn_started",
+                            kind="turn",
+                            chars=input_chars,
+                            attachments=input_attachments,
+                            model=settings.model,
+                            reasoning=settings.reasoning,
+                        )
                         output = await self._run_stream(
                             agent,
                             user_input,
@@ -847,22 +856,37 @@ class AgentRuntime:
                             if turn_sandbox is not None
                             else ((), ())
                         )
+                        images = (*output.images, *auto_images)
+                        files = (*output.files, *auto_files, *delivery.files)
+                        usage = replace(
+                            output.usage,
+                            connector_calls=(
+                                connector_session.calls if connector_session else 0
+                            ),
+                        )
+                        log.info(
+                            "turn_finished",
+                            kind="turn",
+                            duration_ms=round((time.monotonic() - started_turn) * 1000),
+                            tokens=output.usage_tokens,
+                            model=usage.model,
+                            images=usage.images,
+                            connector_calls=usage.connector_calls,
+                            reply_chars=len(output.text),
+                            sent=delivery.sent,
+                            files=len(files),
+                        )
                         return RunOutput(
                             output.text,
-                            (*output.images, *auto_images),
-                            (*output.files, *auto_files, *delivery.files),
+                            images,
+                            files,
                             output.usage_tokens,
                             delivery.sent,
-                            usage=replace(
-                                output.usage,
-                                connector_calls=(
-                                    connector_session.calls if connector_session else 0
-                                ),
-                            ),
+                            usage=usage,
                         )
             finally:
                 await connector_stack.aclose()
-                clear_context(ops_token)
+                structlog.contextvars.reset_contextvars(**dict(ctx_tokens))
                 self._active.pop(key, None)
                 if turn_sandbox is not None:
                     turn_sandbox.mark_used()
@@ -893,7 +917,7 @@ class AgentRuntime:
         queued = self._run_slots.locked()
         if queued:
             log.info(
-                "openai_run_queued",
+                "run_queued",
                 chat_id=context.chat_id,
                 thread_id=context.thread_id,
                 run_key=key,
@@ -920,7 +944,7 @@ class AgentRuntime:
             running = True
             started_at = time.monotonic()
             log.info(
-                "openai_run_started",
+                "run_started",
                 chat_id=context.chat_id,
                 thread_id=context.thread_id,
                 run_key=key,
@@ -942,7 +966,7 @@ class AgentRuntime:
             if running:
                 self._running_runs -= 1
                 log.info(
-                    "openai_run_finished",
+                    "run_finished",
                     chat_id=context.chat_id,
                     thread_id=context.thread_id,
                     run_key=key,
@@ -974,7 +998,7 @@ class AgentRuntime:
                 else None
             )
             log.info(
-                "openai_run_retry",
+                "run_retry",
                 chat_id=context.chat_id,
                 thread_id=context.thread_id,
                 attempt=retry_state.attempt_number,
@@ -1056,7 +1080,7 @@ class AgentRuntime:
                             error=type(rollback_error).__name__,
                         )
                     raise
-        raise RuntimeError("OpenAI run retry loop exited without a result.")
+        raise RuntimeError("Run retry loop exited without a result.")
 
     async def _consume_stream(
         self,
@@ -1115,11 +1139,18 @@ class AgentRuntime:
                     continue
                 tool = describe_tool_event(event, tool_names)
                 if tool is not None:
+                    log.info(
+                        "tool_call",
+                        kind="tool",
+                        tool=tool.tool_name,
+                        status=tool.tool_status,
+                        tool_id=tool.tool_id,
+                    )
                     await on_event(tool)
         except Exception as error:
             if started_streaming:
                 log.warning(
-                    "openai_stream_interrupted",
+                    "run_stream_interrupted",
                     error=type(error).__name__,
                 )
                 raise StreamStartedError(
@@ -1653,6 +1684,28 @@ def _add_cost(first: float | None, second: float | None) -> float | None:
 
 def telegram_run_key(chat_id: int, thread_id: int) -> str:
     return f"tg:{chat_id}:{thread_id}"
+
+
+def _input_metadata(user_input: str | list[TResponseInputItem]) -> tuple[int, int]:
+    """Return (text characters, attachment count) for a user turn."""
+    if isinstance(user_input, str):
+        return len(user_input), 0
+    chars = 0
+    attachments = 0
+    for item in user_input:
+        if not isinstance(item, dict):
+            continue
+        content = item.get("content")
+        if not isinstance(content, list):
+            continue
+        for part in content:
+            if not isinstance(part, dict):
+                continue
+            if part.get("type") == "input_text":
+                chars += len(str(part.get("text") or ""))
+            else:
+                attachments += 1
+    return chars, attachments
 
 
 def describe_tool_event(

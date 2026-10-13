@@ -6,6 +6,7 @@ import logging
 import signal
 from importlib.resources import files
 from pathlib import Path
+from typing import Any
 
 import httpx
 import structlog
@@ -37,10 +38,8 @@ from .group_context import GroupContextService
 from .images import FalImageService, ImageProvider, ImageService
 from .media_groups import MediaGroupService
 from .memory import MemoryService
-from .ops import OpsStore
-from .ops_capture import CapturingTransport
+from .model_traffic import ModelCallTransport
 from .ops_config import describe_fields
-from .ops_logging import OpsLogProcessor
 from .pricing import PricingService
 from .runtime import OPENAI_MAX_RETRIES, AgentRuntime
 from .sandbox import SandboxService
@@ -52,16 +51,47 @@ from .telegram_projects import TelegramProjectService
 log = structlog.get_logger()
 
 
-def configure_logging(processor: Processor | None = None) -> None:
-    logging.basicConfig(level=logging.INFO, format="%(message)s")
-    processors: list[Processor] = [
-        structlog.processors.add_log_level,
+class _JsonStreamHandler(logging.StreamHandler[Any]):
+    """Marks the one handler the logging pipeline installs, for idempotent setup."""
+
+    is_json_handler = True
+
+
+def configure_logging() -> None:
+    """Route application and dependency logs through one JSON pipeline.
+
+    `structlog.stdlib.ProcessorFormatter` sends both application events and
+    standard-library logs from aiogram, httpx and openai through the same
+    processors, so every line is one JSON object on stdout with a `level` field.
+    Dozzle detects JSON automatically, colour-codes levels and can query the
+    stream with SQL. Safe to call more than once: the pipeline is installed once.
+    """
+    root = logging.getLogger()
+    if any(getattr(handler, "is_json_handler", False) for handler in root.handlers):
+        return
+    pre_chain: list[Processor] = [
+        structlog.contextvars.merge_contextvars,
+        structlog.stdlib.add_log_level,
         structlog.processors.TimeStamper(fmt="iso", utc=True),
+        structlog.processors.format_exc_info,
     ]
-    if processor is not None:
-        processors.append(processor)
-    processors.append(structlog.processors.JSONRenderer())
-    structlog.configure(processors=processors)
+    formatter = structlog.stdlib.ProcessorFormatter(
+        foreign_pre_chain=pre_chain,
+        processors=[
+            structlog.stdlib.ProcessorFormatter.remove_processors_meta,
+            structlog.processors.JSONRenderer(),
+        ],
+    )
+    handler = _JsonStreamHandler()
+    handler.setFormatter(formatter)
+    root.addHandler(handler)
+    root.setLevel(logging.INFO)
+    structlog.configure(
+        processors=[*pre_chain, structlog.stdlib.ProcessorFormatter.wrap_for_formatter],
+        logger_factory=structlog.stdlib.LoggerFactory(),
+        wrapper_class=structlog.stdlib.BoundLogger,
+        cache_logger_on_first_use=True,
+    )
 
 
 def load_base_prompt(path: Path) -> str:
@@ -80,25 +110,11 @@ async def run() -> None:
     )
     await database.open()
     config = await _effective_settings(database, base)
-    store = OpsStore(
-        database,
-        media_path=config.skye_ops_media_path,
-        capture_payloads=config.skye_ops_capture_payloads,
-        capture_media=config.skye_ops_capture_media,
-        max_body_bytes=config.skye_ops_max_body_bytes,
-        log_retention_days=config.skye_ops_log_retention_days,
-        log_max_rows=config.skye_ops_log_max_rows,
-        trace_retention_days=config.skye_ops_trace_retention_days,
-        trace_max_rows=config.skye_ops_trace_max_rows,
-    )
-    await store.open()
-    configure_logging(OpsLogProcessor(store))
 
     proxy_url = config.skye_proxy_url
     http_client = httpx.AsyncClient(
-        transport=CapturingTransport(
-            httpx.AsyncHTTPTransport(proxy=proxy_url) if proxy_url else httpx.AsyncHTTPTransport(),
-            store,
+        transport=ModelCallTransport(
+            httpx.AsyncHTTPTransport(proxy=proxy_url) if proxy_url else httpx.AsyncHTTPTransport()
         ),
         timeout=httpx.Timeout(600, connect=10),
         follow_redirects=True,
@@ -283,7 +299,6 @@ async def run() -> None:
         janitor = (
             asyncio.create_task(sandbox.run_janitor()) if sandbox is not None else None
         )
-        maintenance = asyncio.create_task(_store_maintenance(store))
         stop = asyncio.Event()
         loop = asyncio.get_running_loop()
         for sig in (signal.SIGINT, signal.SIGTERM):
@@ -303,15 +318,12 @@ async def run() -> None:
         finally:
             polling.cancel()
             scheduler.cancel()
-            maintenance.cancel()
             if janitor is not None:
                 janitor.cancel()
             with contextlib.suppress(asyncio.CancelledError):
                 await polling
             with contextlib.suppress(asyncio.CancelledError):
                 await scheduler
-            with contextlib.suppress(asyncio.CancelledError):
-                await maintenance
             if janitor is not None:
                 with contextlib.suppress(asyncio.CancelledError):
                     await janitor
@@ -328,7 +340,6 @@ async def run() -> None:
             await audio_client.close()
         await bot.session.close()
         await database.close()
-        await store.close()
 
 
 def main() -> None:
@@ -348,11 +359,11 @@ def load_settings(overrides: dict[str, object] | None = None) -> Settings:
 
 
 async def _effective_settings(database: Database, base: Settings) -> Settings:
-    """Layer panel-managed overrides on top of the process environment.
+    """Layer stored settings overrides on top of the process environment.
 
-    A stored override wins over both the shell and `.env`, which is what makes
-    the panel effective inside a container where compose injects the original
-    environment. An invalid override is ignored rather than blocking startup.
+    A stored override wins over both the shell and `.env`, which matters inside
+    a container where compose injects the original environment. An invalid set
+    of overrides is ignored rather than blocking startup.
     """
     overrides = await database.config_overrides()
     if not overrides:
@@ -370,11 +381,3 @@ async def _effective_settings(database: Database, base: Settings) -> Settings:
         structlog.get_logger().warning("ops_overrides_ignored", fields=fields)
         return base
 
-
-async def _store_maintenance(store: OpsStore) -> None:
-    while True:
-        await asyncio.sleep(3600)
-        try:
-            await store.prune()
-        except Exception:
-            structlog.get_logger().warning("ops_prune_failed")

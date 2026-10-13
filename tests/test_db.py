@@ -272,3 +272,10 @@ async def test_existing_automations_table_gains_once_column(tmp_path: Path) -> N
         assert item.name == "Briefing"
     finally:
         await database.close()
+
+
+async def test_config_overrides_round_trip(database: Database) -> None:
+    await database.set_config_overrides({"SKYE_MAX_TURNS": 25}, [])
+    assert await database.config_overrides() == {"SKYE_MAX_TURNS": 25}
+    await database.set_config_overrides({}, ["SKYE_MAX_TURNS"])
+    assert await database.config_overrides() == {}

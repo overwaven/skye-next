@@ -501,7 +501,7 @@ class Database:
         return await cursor.fetchone()
 
     async def config_overrides(self) -> dict[str, Any]:
-        """Panel-managed settings overrides, keyed by environment variable."""
+        """Stored settings overrides, keyed by environment variable."""
         rows = await self.fetch_all(
             "SELECT env, value FROM ops_config_overrides ORDER BY env"
         )

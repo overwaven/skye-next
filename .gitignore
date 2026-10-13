@@ -19,3 +19,8 @@ wheels/
 
 # Runtime state
 data/
+
+# Dozzle user list and settings; keep the example, ignore the real one
+dozzle/users.yml
+dozzle/users.yaml
+dozzle/*.json

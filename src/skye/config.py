@@ -136,17 +136,6 @@ class Settings(BaseSettings):
     skye_sandbox_allowed_domains: SandboxDomains = Field(default=SANDBOX_DOMAINS, min_length=1)
     skye_proxy_url: str | None = None
     skye_tracing: bool = False
-    # Operator observability. Payload capture stores full model requests and
-    # responses, including prompts, memories and file bodies, so keep retention
-    # short and media on the data volume.
-    skye_ops_capture_payloads: bool = True
-    skye_ops_capture_media: bool = True
-    skye_ops_media_path: Path = Path("data/ops/media")
-    skye_ops_log_retention_days: int = Field(default=14, ge=1, le=365)
-    skye_ops_log_max_rows: int = Field(default=20_000, ge=100)
-    skye_ops_trace_retention_days: int = Field(default=14, ge=1, le=365)
-    skye_ops_trace_max_rows: int = Field(default=2_000, ge=10)
-    skye_ops_max_body_bytes: int = Field(default=2_000_000, ge=10_000)
     # Public origin used to build webhook automation URLs.
     skye_web_origin: str | None = None
     # Retail Sparks charged per 1 ₽ of provider-reported cost. The fallback

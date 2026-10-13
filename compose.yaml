@@ -10,7 +10,6 @@ services:
       - .env
     environment:
       SKYE_DATABASE_PATH: /data/skye.db
-      SKYE_OPS_MEDIA_PATH: /data/ops/media
     volumes:
       - skye-data:/data
       # Sandbox control: the bot spawns one Docker container per shell_exec
@@ -19,6 +18,15 @@ services:
       # unless SKYE_SANDBOX_ALLOW_NETWORK=true.
       - /var/run/docker.sock:/var/run/docker.sock
       - skye-sandbox-work:/sandbox-work
+    # Dozzle reads the container's JSON logs from the json-file driver, so cap
+    # how much Docker keeps on disk.
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "5"
+    labels:
+      com.skye.logs: "true"
     init: true
     restart: unless-stopped
     stop_grace_period: 30s
@@ -28,6 +36,28 @@ services:
       - ${DOCKER_GID:-989}
     security_opt:
       - no-new-privileges:true
+
+  # Dozzle is the log viewer: it streams the JSON logs, colour-codes levels and
+  # runs SQL against the structured fields. Start it with the logs profile:
+  #   docker compose --profile logs up -d dozzle
+  # Authentication is required: mount docker.sock means root-equivalent access
+  # to the host. Generate dozzle/users.yml with:
+  #   docker run -it --rm amir20/dozzle generate admin --password --email you@example.com
+  dozzle:
+    profiles: ["logs"]
+    image: amir20/dozzle:latest
+    container_name: skye-dozzle
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - ./dozzle:/data
+    ports:
+      - "8080:8080"
+    environment:
+      DOZZLE_AUTH_PROVIDER: simple
+      # Show only the Skye container; drop this to see every container.
+      DOZZLE_FILTER: label=com.skye.logs
+      DOZZLE_HOSTNAME: skye
+    restart: unless-stopped
 
 volumes:
   skye-data:

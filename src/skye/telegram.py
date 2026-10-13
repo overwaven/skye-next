@@ -70,6 +70,7 @@ from .runtime import (
     RunEvent,
     RunOutput,
     StreamStartedError,
+    _input_metadata,
     leftover_reply,
 )
 from .skills import SkillError, SkillPanel, SkillService, SkillWizard
@@ -1215,6 +1216,18 @@ class TelegramApp:
             project = await self.telegram_projects.active(context.user_id)
             conversation_id = await self.telegram_projects.conversation_id(project)
             extra_instructions = project.instructions
+        chars, attachments = _input_metadata(user_input)
+        log.info(
+            "user_message",
+            kind="message",
+            role="user",
+            chat_id=context.chat_id,
+            user_id=context.user_id,
+            thread_id=context.thread_id,
+            chars=chars,
+            attachments=attachments,
+            chat_type=context.chat_type,
+        )
         await self._stream_turn(
             message,
             context,
@@ -1397,6 +1410,18 @@ class TelegramApp:
                     awaiting_reply=awaiting_reply,
                 )
                 await self._settle_turn(context, message, payer_id, paid, output)
+                log.info(
+                    "assistant_reply",
+                    kind="message",
+                    role="assistant",
+                    chat_id=context.chat_id,
+                    user_id=context.user_id,
+                    thread_id=context.thread_id,
+                    chars=len(output.text),
+                    images=len(output.images),
+                    files=len(output.files),
+                    sent=output.sent,
+                )
                 if message is not None and context.chat_type != "private":
                     await self.groups.mark_seen(message)
                 await self._finish_visible(
@@ -1720,6 +1745,17 @@ class TelegramApp:
             ),
         )
         if charged:
+            log.info(
+                "turn_billed",
+                kind="billing",
+                chat_id=context.chat_id,
+                user_id=payer_id,
+                thread_id=context.thread_id,
+                cost_milli=cost,
+                tokens=usage.total_tokens,
+                model=usage.model,
+                images=usage.images,
+            )
             await self._show_spend(context, message, payer_id, cost, usage)
 
     async def _show_spend(

@@ -65,6 +65,35 @@ Stars. There is no subscription.
   tools are exposed to the model as ordinary functions.
 - Spending is shown under a reply by default; each scope can hide it.
 
+## Observability
+
+Logs are structured JSON on stdout, one object per line, and Dozzle is the only
+viewer. `configure_logging` routes `structlog` and standard-library logs from
+dependencies (aiogram, httpx, openai) through `structlog.stdlib.ProcessorFormatter`,
+so application events, user messages, assistant replies, tool calls, turns,
+billing, and model calls (`model_call` from `ModelCallTransport`) all land in the
+same stream with a `level` and `kind` field. `merge_contextvars` tags every line
+inside a run with `run_id`, `chat_id`, `user_id`, and `thread_id`.
+
+Nothing is mirrored to SQLite: prompts and responses are never stored, so message
+text stays out of the logs — events carry only metadata such as length, tokens,
+duration, and cost. Dozzle detects the JSON automatically, colour-codes levels,
+groups tracebacks, and can query the fields with its built-in SQL engine
+(`SELECT * FROM logs WHERE kind = 'turn'`, `WHERE level = 'error'`).
+
+Run it with the logs profile:
+
+```bash
+docker compose --profile logs up -d dozzle   # http://<host>:8080
+```
+
+Dozzle needs `docker.sock`, which is root-equivalent on the host, so it is never
+exposed without authentication: `DOZZLE_AUTH_PROVIDER=simple` reads
+`dozzle/users.yml` (copy `dozzle/users.yml.example` and generate the hash with
+`docker run -it --rm amir20/dozzle generate`). The compose service filters to the
+Skye container through the `com.skye.logs` label and Docker caps its json-file
+logs at 10 MB × 5.
+
 ## Tooling
 
 ```bash
