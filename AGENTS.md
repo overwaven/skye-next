@@ -32,7 +32,10 @@ saved names in `files`, `list_files` discovers them, and sandbox workspaces are
 seeded with the same names under `/work`. Finished pictures are stored back and
 delivered automatically. The image tools never guess a source: they edit the
 photo attached to the current message or the exact saved names the model passes.
-A conversation that predates the library is imported once on its next turn.
+A scope keeps only its newest files — 20 in a group, 50 in a private chat — and
+drops older ones, so a busy group never hoards everyone's media; idle-TTL and
+byte caps apply too. A conversation that predates the library is imported once
+on its next turn.
 
 ## Stack
 

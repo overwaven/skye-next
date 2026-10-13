@@ -246,6 +246,8 @@ async def run() -> None:
         ttl_seconds=config.skye_files_ttl_seconds,
         scope_bytes=config.skye_files_scope_bytes,
         total_bytes=config.skye_files_total_bytes,
+        scope_count=config.skye_files_scope_count,
+        group_count=config.skye_files_group_count,
     )
     runtime = AgentRuntime(
         config,

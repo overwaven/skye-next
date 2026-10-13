@@ -20,6 +20,8 @@ def library(tmp_path: Path, **overrides: Any) -> MediaLibrary:
         "ttl_seconds": 30 * 86_400,
         "scope_bytes": 1_048_576,
         "total_bytes": 10_485_760,
+        "scope_count": 50,
+        "group_count": 20,
     }
     options.update(overrides)
     return MediaLibrary(tmp_path / "files", **options)
@@ -110,6 +112,48 @@ def test_scope_byte_cap_is_enforced(tmp_path: Path) -> None:
 
     with pytest.raises(ValueError, match="full"):
         store.save(scope, b"67890")
+
+
+def test_oldest_files_are_evicted_past_the_count(tmp_path: Path) -> None:
+    store = library(tmp_path, scope_count=3)
+    scope = Scope("user", 7)
+
+    for index in range(4):
+        store.save(scope, PNG + bytes([index]))
+
+    assert [entry.name for entry in store.images(scope)] == [
+        "image-2.png",
+        "image-3.png",
+        "image-4.png",
+    ]
+    assert store.entry(scope, "image-1.png") is None
+
+
+def test_groups_keep_fewer_files_than_private_chats(tmp_path: Path) -> None:
+    store = library(tmp_path, scope_count=50, group_count=2)
+    chat = Scope("chat", -100)
+    private = Scope("user", 7)
+
+    for index in range(4):
+        store.save(chat, PNG + bytes([index]))
+        store.save(private, PNG + bytes([index]))
+
+    assert [entry.name for entry in store.images(chat)] == ["image-3.png", "image-4.png"]
+    assert len(store.images(private)) == 4
+
+
+def test_cleanup_enforces_the_count_on_existing_files(tmp_path: Path) -> None:
+    store = library(tmp_path, scope_count=2)
+    scope = Scope("user", 7)
+    directory = store.scope_dir(scope)
+    for index in range(4):
+        path = directory / f"image-{index + 1}.png"
+        path.write_bytes(PNG)
+        os.utime(path, (1_000 + index, 1_000 + index))
+
+    store.cleanup()
+
+    assert [entry.name for entry in store.images(scope)] == ["image-3.png", "image-4.png"]
 
 
 def test_cleanup_removes_expired_scopes(tmp_path: Path) -> None:

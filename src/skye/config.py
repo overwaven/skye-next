@@ -102,6 +102,10 @@ class Settings(BaseSettings):
     skye_files_ttl_seconds: int = Field(default=30 * 86_400, ge=0)
     skye_files_scope_bytes: int = Field(default=512 * 1_048_576, ge=1)
     skye_files_total_bytes: int = Field(default=5 * 1_073_741_824, ge=1)
+    # Keep only the newest files per scope; groups retain fewer because the
+    # library is shared by everyone in the chat.
+    skye_files_scope_count: int = Field(default=50, ge=1)
+    skye_files_group_count: int = Field(default=20, ge=1)
     skye_base_prompt_path: Path = Path("BASE_PROMPT.md")
     skye_default_model: ModelId = HOSTED_MODEL
     skye_default_reasoning: Reasoning = "medium"

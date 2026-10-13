@@ -21,6 +21,8 @@ LAST_USED_NAME = ".skye-last-used"
 DEFAULT_TTL_SECONDS = 30 * 86_400
 DEFAULT_SCOPE_BYTES = 512 * 1_048_576
 DEFAULT_TOTAL_BYTES = 5 * 1_073_741_824
+DEFAULT_SCOPE_COUNT = 50
+DEFAULT_GROUP_COUNT = 20
 DEFAULT_LIST_LIMIT = 20
 MAX_SEEDED_FILES = 20
 SKIP_PARTS = frozenset({"__pycache__", ".git", ".venv", "venv", "node_modules", "site-packages"})
@@ -66,7 +68,8 @@ class MediaLibrary:
     later message — and any tool — can read it by name. Nothing is tied to the
     conversation window or to the optional Docker sandbox: the bytes live on
     disk under one directory per user (private chat) or chat (group). Scope
-    directories are bounded by an idle TTL and a byte cap, swept by a janitor.
+    directories keep only the newest files, bounded by a per-scope count (lower
+    in shared chats), an idle TTL and a byte cap, swept by a janitor.
     """
 
     def __init__(
@@ -76,11 +79,15 @@ class MediaLibrary:
         ttl_seconds: int = DEFAULT_TTL_SECONDS,
         scope_bytes: int = DEFAULT_SCOPE_BYTES,
         total_bytes: int = DEFAULT_TOTAL_BYTES,
+        scope_count: int = DEFAULT_SCOPE_COUNT,
+        group_count: int = DEFAULT_GROUP_COUNT,
     ) -> None:
         self.root = root
         self.ttl_seconds = ttl_seconds
         self.scope_bytes = scope_bytes
         self.total_bytes = total_bytes
+        self.scope_count = scope_count
+        self.group_count = group_count
 
     def scope_dir(self, scope: Scope) -> Path:
         path = self.root / SCOPES_DIRNAME / _scope_key(scope)
@@ -106,6 +113,7 @@ class MediaLibrary:
             mime = mime or "application/octet-stream"
             filename = self._free_name(directory, name)
         target = directory / filename
+        self._evict_oldest(directory, max(self._limit_for(scope) - 1, 0))
         target.write_bytes(data)
         self._touch(scope)
         return MediaEntry(filename, mime, len(data), target.stat().st_mtime)
@@ -209,6 +217,7 @@ class MediaLibrary:
                     last_used = scope_dir.stat().st_mtime
                 except OSError:
                     continue
+            self._evict_oldest(scope_dir, self._limit_for_key(scope_dir.name))
             entries.append((last_used, _dir_size(scope_dir), scope_dir))
         expired = (
             [item for item in entries if now - item[0] > self.ttl_seconds]
@@ -228,15 +237,37 @@ class MediaLibrary:
                 total -= size
                 log.info("library_scope_evicted", scope=path.name)
 
+    def _limit_for(self, scope: Scope) -> int:
+        return self.group_count if scope.kind == "chat" else self.scope_count
+
+    def _limit_for_key(self, key: str) -> int:
+        return self.group_count if key.startswith("c") else self.scope_count
+
+    def _evict_oldest(self, directory: Path, limit: int) -> None:
+        """Delete the oldest files so at most ``limit`` remain."""
+        if limit < 0:
+            return
+        files: list[Path] = []
+        for path in directory.iterdir():
+            if path.name == LAST_USED_NAME or _skip(path.name) or not path.is_file():
+                continue
+            files.append(path)
+        excess = len(files) - limit
+        if excess <= 0:
+            return
+        files.sort(key=_eviction_key)
+        for path in files[:excess]:
+            with suppress(OSError):
+                path.unlink()
+                log.info("library_file_evicted", scope=directory.name, name=path.name)
+
     def _next_image_name(self, directory: Path, suffix: str) -> str:
         used: set[int] = set()
         for path in directory.iterdir():
             match = _IMAGE_NAME.fullmatch(path.name)
             if match is not None:
                 used.add(int(match.group(1)))
-        index = 1
-        while index in used:
-            index += 1
+        index = max(used) + 1 if used else 1
         return f"image-{index}.{suffix}"
 
     def _free_name(self, directory: Path, name: str) -> str:
@@ -291,6 +322,12 @@ def _size_label(size: int) -> str:
 
 def _scope_key(scope: Scope) -> str:
     return f"{scope.kind[0]}{scope.id}"
+
+
+def _eviction_key(path: Path) -> tuple[int, str]:
+    with suppress(OSError):
+        return (path.stat().st_mtime_ns, path.name)
+    return (0, path.name)
 
 
 def _dir_size(path: Path) -> int:
