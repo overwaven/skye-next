@@ -68,12 +68,14 @@ Stars. There is no subscription.
   providers is a catalog change, not a code change.
 - A wallet per user is an append-only ledger (`wallet_ledger`): top-ups, spends
   with their token and image breakdown and the provider cost, bonuses, refunds.
-- A small free daily and monthly token allowance stays for everyone; past it,
-  runs are paid from the wallet.
-- Top-up packages are code-owned (`sparks.py`); bigger packages carry a better
-  rate and are one-time Telegram Stars payments.
-- In groups each person pays for their own requests. Any member can volunteer as
-  the chat **sponsor** and cover every request from their own wallet.
+- A small free daily and monthly token allowance stays for everyone and is spent
+  before the wallet; `/account` shows what is left and every request reports
+  whether it came out of the allowance or the wallet. Past the allowance, runs
+  are paid from the wallet.
+- Every chat is open by default: a group needs no allowlist and each person pays
+  for their own requests. An **allow** entry grants free, uncharged use to a
+  person or a whole group; a **ban** still blocks one. Any member can volunteer
+  as the chat **sponsor** and cover every request from their own wallet.
 - Connector tool calls are bridged locally and billed at a flat rate
   (`SKYE_CONNECTOR_CALL_RUB`). Chat Completions cannot run provider-hosted MCP
   tools, so each Composio or custom MCP endpoint is connected in-process and its

@@ -64,7 +64,7 @@ from .models import (
     ScopeKind,
 )
 from .quota import QuotaService
-from .rich import RichMessages
+from .rich import RichMessages, format_tokens
 from .runtime import (
     AgentRuntime,
     ContextLimitError,
@@ -100,10 +100,6 @@ from .ui import activity_message
 log = structlog.get_logger()
 REASONING: tuple[Reasoning, ...] = ("none", "low", "medium", "high", "xhigh", "max")
 BOT_NAME = re.compile(r"(?<!\w)(?:skye|скай)(?!\w)", re.IGNORECASE)
-GROUP_NEEDS_PLUS = (
-    "Skye is not enabled in this chat. An owner can allowlist it, or someone can "
-    "sponsor it from /account."
-)
 AdminAction = Literal["allow", "ban", "remove"]
 BalanceAction = Literal["add", "sub"]
 CATCHUP_PROMPT = (
@@ -217,7 +213,7 @@ class TelegramApp:
         self.connectors = ConnectorPanel(connectors, self.rich, bot)
         self.skill_panel = SkillPanel(skills, self.rich, bot)
         self.project_panel = ProjectPanel(telegram_projects, self.rich, bot)
-        self.account = AccountPanel(billing, sparks, access, self.rich, bot)
+        self.account = AccountPanel(billing, sparks, access, self.rich, bot, self.quota)
         self.automation_panel = (
             AutomationPanel(automations, self.rich) if automations is not None else None
         )
@@ -350,7 +346,10 @@ class TelegramApp:
         context = self._context(message)
         if context is None:
             return
-        await self.account.show(message, context)
+        try:
+            await self.account.show(message, context)
+        except BillingError as error:
+            await self.rich.send(message, str(error))
 
     async def paysupport(self, message: Message) -> None:
         await self.account.paysupport(message)
@@ -1628,7 +1627,7 @@ class TelegramApp:
                     on_voice=on_voice,
                     awaiting_reply=awaiting_reply,
                 )
-                await self._settle_turn(context, message, payer_id, paid, output)
+                await self._settle_turn(context, message, payer_id, paid, complimentary, output)
                 log.info(
                     "assistant_reply",
                     kind="message",
@@ -1950,11 +1949,14 @@ class TelegramApp:
         message: Message | None,
         payer_id: int,
         paid: bool,
+        complimentary: bool,
         output: RunOutput,
     ) -> None:
         usage = output.usage
         if not paid:
             await self.quota.record(context, output.usage_tokens, billed_user_id=payer_id)
+            if not complimentary:
+                await self._show_free_spend(context, message, payer_id)
             return
         cost = self.sparks.cost_milli(usage, provider_cost_rub=usage.provider_cost_rub)
         if cost <= 0:
@@ -2007,6 +2009,25 @@ class TelegramApp:
             return
         await self.rich.send(message, self._spend_line(cost, usage))
 
+    async def _show_free_spend(
+        self, context: RequestContext, message: Message | None, payer_id: int
+    ) -> None:
+        """Show that a request came out of the free allowance, not the wallet."""
+
+        if message is None:
+            return
+        if context.chat_type != "private" and payer_id != context.user_id:
+            return
+        current = await self.database.get_settings(context.scope)
+        if not current.sparks_display:
+            return
+        allowance = await self.quota.allowance(payer_id)
+        await self.rich.send(
+            message,
+            f"Free allowance · {format_tokens(allowance.daily_left)} of "
+            f"{format_tokens(allowance.daily_limit)} tokens left today",
+        )
+
     @staticmethod
     def _spend_line(cost: int, usage: object) -> str:
         parts = [f"{SPARKS_SYMBOL} {format_milli(cost)}"]
@@ -2025,7 +2046,7 @@ class TelegramApp:
         if await self.database.access_effect(Scope("user", context.user_id)) == "ban":
             await self.rich.send(message, "This account is banned.")
             return
-        await self.rich.send(message, GROUP_NEEDS_PLUS)
+        await self.rich.send(message, "This chat is banned.")
 
     async def _require_plus(self, message: Message, context: RequestContext) -> bool:
         if await self.access.allowed(context) and not await self.access.banned(context.user_id):

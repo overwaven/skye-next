@@ -7,6 +7,7 @@ sponsor when one is set, otherwise the speaker.
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from datetime import datetime
 
 from .access import AccessService
@@ -20,6 +21,28 @@ DAILY_LIMIT_COPY = "The free daily allowance is used. Top up Sparks in /account 
 MONTHLY_LIMIT_COPY = (
     "The free monthly allowance is used. Top up Sparks in /account to keep going."
 )
+
+
+@dataclass(frozen=True, slots=True)
+class Allowance:
+    """How much of the free token allowance is left for one billed user."""
+
+    daily_used: int
+    daily_limit: int
+    monthly_used: int
+    monthly_limit: int
+
+    @property
+    def daily_left(self) -> int:
+        return max(0, self.daily_limit - self.daily_used)
+
+    @property
+    def monthly_left(self) -> int:
+        return max(0, self.monthly_limit - self.monthly_used)
+
+    @property
+    def exhausted(self) -> bool:
+        return self.daily_left <= 0 or self.monthly_left <= 0
 
 
 class AllowanceError(Exception):
@@ -55,6 +78,12 @@ class QuotaService:
         user_id = self._billed_user_id(context, billed_user_id)
         daily, monthly = await self.database.usage_totals(user_id, now=now)
         return daily >= FREE_DAILY or monthly >= FREE_MONTHLY
+
+    async def allowance(
+        self, user_id: int, *, now: datetime | None = None
+    ) -> Allowance:
+        daily, monthly = await self.database.usage_totals(user_id, now=now)
+        return Allowance(daily, FREE_DAILY, monthly, FREE_MONTHLY)
 
     async def record(
         self,

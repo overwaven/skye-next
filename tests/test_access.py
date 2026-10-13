@@ -36,26 +36,29 @@ async def test_ban_blocks_private_and_groups(database: Database) -> None:
     assert await access.allowed(RequestContext(1, "private", user_id=1))
 
 
-async def test_group_needs_allowlist_or_sponsor(database: Database) -> None:
+async def test_group_is_open_by_default(database: Database) -> None:
     access = AccessService(database, frozenset({1}))
     group = RequestContext(-100, "supergroup", user_id=42)
 
-    assert not await access.allowed(group)
+    assert await access.allowed(group)
 
+    # An allow entry grants free use; it no longer gates the chat.
     await database.set_access(Scope("chat", -100), "allow", created_by=1)
     assert await access.allowed(group)
 
+    await database.set_access(Scope("chat", -100), "ban", created_by=1)
+    assert not await access.allowed(group)
 
-async def test_sponsor_enables_a_group(database: Database) -> None:
+
+async def test_sponsor_does_not_gate_a_group(database: Database) -> None:
     access = AccessService(database, frozenset({1}))
     group = RequestContext(-100, "supergroup", user_id=42)
 
-    assert not await access.allowed(group)
+    assert await access.allowed(group)
     await database.set_chat_sponsor(-100, 42)
     assert await access.allowed(group)
-
     await database.clear_chat_sponsor(-100)
-    assert not await access.allowed(group)
+    assert await access.allowed(group)
 
 
 async def test_owner_always_allowed(database: Database) -> None:

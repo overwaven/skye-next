@@ -30,6 +30,7 @@ from skye.models import (
     Scope,
     Skill,
 )
+from skye.quota import Allowance
 from skye.rich import RichMessages
 
 
@@ -92,7 +93,9 @@ def test_access_screen_lists_entries_and_group_status() -> None:
     assert isinstance(notice, InputRichBlockParagraph)
     assert isinstance(status, InputRichBlockParagraph)
     assert notice.text == ["Allowed user ", RichTextCode(text="42"), "."]
-    assert status.text == "This group is not allowlisted."
+    assert status.text == (
+        "This group is on paid access. Each person pays for their own requests."
+    )
     assert isinstance(table, InputRichBlockTable)
     assert table.cells[1][0].text == "user"
     assert table.cells[1][1].text == RichTextCode(text="42")
@@ -185,7 +188,9 @@ def test_access_screen_can_hide_entries() -> None:
     assert all(not isinstance(block, InputRichBlockTable) for block in message.blocks)
     status = message.blocks[1]
     assert isinstance(status, InputRichBlockParagraph)
-    assert status.text == "This group is not allowlisted."
+    assert status.text == (
+        "This group is on paid access. Each person pays for their own requests."
+    )
 
 
 def test_reasoning_chooser_uses_a_title_instead_of_the_settings_table() -> None:
@@ -502,6 +507,38 @@ def test_sparks_account_shows_balance_and_spend_state() -> None:
     assert "Spend display: On" in joined
 
 
+def test_sparks_account_shows_the_free_allowance() -> None:
+    message = RichMessages.sparks_account(
+        balance=0,
+        entries=[],
+        show_spend=True,
+        owner=False,
+        allowance=Allowance(3_000, 20_000, 3_000, 400_000),
+    )
+    tables = [block for block in message.blocks if isinstance(block, InputRichBlockTable)]
+    assert tables
+    rows = tables[0].cells
+    assert rows[0][0].text == "Period"
+    assert rows[1][0].text == "Today"
+    assert rows[1][2].text == "17k"
+    assert rows[2][2].text == "397k"
+    texts = [str(getattr(block, "text", "")) for block in message.blocks]
+    assert any("Free allowance" in text for text in texts)
+    assert any("used before" in text for text in texts)
+
+
+def test_complimentary_sparks_account_hides_the_balance() -> None:
+    message = RichMessages.sparks_account(
+        balance=0,
+        entries=[],
+        show_spend=True,
+        owner=False,
+        complimentary=True,
+    )
+    texts = [str(getattr(block, "text", "")) for block in message.blocks]
+    assert any("Free access" in text for text in texts)
+
+
 def test_sparks_group_explains_sponsorship() -> None:
     message = RichMessages.sparks_group(
         balance=0,
@@ -511,6 +548,18 @@ def test_sparks_group_explains_sponsorship() -> None:
     )
     texts = [str(getattr(block, "text", "")) for block in message.blocks]
     assert any("No sponsor" in text for text in texts)
+
+
+def test_sparks_group_shows_allowance_left() -> None:
+    message = RichMessages.sparks_group(
+        balance=0,
+        sponsor_id=None,
+        user_id=42,
+        owner=False,
+        allowance=Allowance(5_000, 20_000, 5_000, 400_000),
+    )
+    texts = [str(getattr(block, "text", "")) for block in message.blocks]
+    assert any("15k of 20k tokens left today" in text for text in texts)
 
 
 def test_topup_checkout_names_the_package() -> None:

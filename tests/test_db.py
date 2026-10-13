@@ -32,7 +32,7 @@ async def test_settings_are_scoped(database: Database) -> None:
     assert (await database.get_settings(group)).reasoning == "low"
 
 
-async def test_group_allowlist_does_not_grant_other_groups(database: Database) -> None:
+async def test_group_allowlist_no_longer_gates_other_groups(database: Database) -> None:
     access = AccessService(database, frozenset({1}))
     await database.set_access(Scope("chat", -100), "allow", created_by=1)
 
@@ -40,8 +40,9 @@ async def test_group_allowlist_does_not_grant_other_groups(database: Database) -
     other_group = RequestContext(-200, "supergroup", user_id=42)
     private = RequestContext(42, "private", user_id=42)
 
+    # Groups are open by default now; the allow entry only makes them free.
     assert await access.allowed(group)
-    assert not await access.allowed(other_group)
+    assert await access.allowed(other_group)
     assert await access.allowed(private)
 
 

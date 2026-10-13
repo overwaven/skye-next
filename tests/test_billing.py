@@ -16,6 +16,7 @@ from skye.billing import (
 from skye.db import Database
 from skye.models import RequestContext, Scope
 from skye.pricing import PricingService
+from skye.quota import QuotaService
 from skye.sparks import PACKAGES, SPARK_SCALE, SPARKS_NAME, SparkService
 
 
@@ -182,9 +183,10 @@ class RichStub:
 
 async def test_spend_toggle_callback_updates_the_scope(database: Database) -> None:
     rich = RichStub()
+    access = AccessService(database, frozenset({1}))
     panel = AccountPanel(
-        service(database), sparks(database), AccessService(database, frozenset({1})),
-        cast(Any, rich), cast(Any, AsyncMock()),
+        service(database), sparks(database), access,
+        cast(Any, rich), cast(Any, AsyncMock()), QuotaService(database, access),
     )
     context = RequestContext(42, "private", user_id=42)
     message = cast(Any, object())
@@ -194,12 +196,29 @@ async def test_spend_toggle_callback_updates_the_scope(database: Database) -> No
     assert (await database.get_settings(Scope("user", 42))).sparks_display is False
 
 
+async def test_private_account_shows_the_free_allowance(database: Database) -> None:
+    rich = RichStub()
+    access = AccessService(database, frozenset({1}))
+    panel = AccountPanel(
+        service(database), sparks(database), access,
+        cast(Any, rich), cast(Any, AsyncMock()), QuotaService(database, access),
+    )
+    await database.add_usage(42, 3_000)
+
+    await panel.show(cast(Any, object()), RequestContext(42, "private", user_id=42))
+
+    payload = rich.sent[-1]
+    assert "allowance" in payload
+    assert "3000" in payload
+
+
 async def test_sponsor_callback_sets_and_clears(database: Database) -> None:
     rich = RichStub()
     wallet = sparks(database)
+    access = AccessService(database, frozenset({1}))
     panel = AccountPanel(
-        service(database), wallet, AccessService(database, frozenset({1})),
-        cast(Any, rich), cast(Any, AsyncMock()),
+        service(database), wallet, access,
+        cast(Any, rich), cast(Any, AsyncMock()), QuotaService(database, access),
     )
     await database.set_access(Scope("chat", -100), "allow", created_by=1)
     context = RequestContext(-100, "supergroup", user_id=42)

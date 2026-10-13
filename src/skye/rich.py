@@ -46,6 +46,7 @@ from .models import (
     TelegramProject,
     WalletEntry,
 )
+from .quota import Allowance
 from .sparks import SPARKS_NAME, SPARKS_SYMBOL, format_amount
 from .telegram_threads import api_thread_id, quote_reply, reply_parameters
 from .ui import activity_message, decorate_keyboard
@@ -54,6 +55,13 @@ from .ui import activity_message, decorate_keyboard
 def _voice_filename(audio: bytes) -> str:
     mp3_headers = (b"ID3", b"\xff\xfb", b"\xff\xf3", b"\xff\xf2")
     return "voice.mp3" if audio.startswith(mp3_headers) else "voice.ogg"
+
+
+def format_tokens(value: int) -> str:
+    if value >= 1000:
+        text = f"{value / 1000:.1f}".rstrip("0").rstrip(".")
+        return f"{text}k"
+    return str(value)
 
 
 class RichMessages:
@@ -281,6 +289,8 @@ class RichMessages:
         show_spend: bool,
         owner: bool,
         notice: str | None = None,
+        complimentary: bool = False,
+        allowance: Allowance | None = None,
     ) -> InputRichMessage:
         def cell(text: str, *, header: bool = False) -> RichBlockTableCell:
             return RichBlockTableCell(
@@ -295,8 +305,38 @@ class RichMessages:
             blocks.append(
                 InputRichBlockParagraph(text=f"Owner access. {SPARKS_NAME} are not charged.")
             )
+        elif complimentary:
+            blocks.append(
+                InputRichBlockParagraph(text=f"Free access. {SPARKS_NAME} are not charged.")
+            )
         else:
             blocks.append(InputRichBlockParagraph(text=f"Balance: {format_amount(balance)}"))
+        if allowance is not None:
+            blocks.append(InputRichBlockSectionHeading(text="Free allowance", size=3))
+            rows = [
+                [
+                    cell("Period", header=True),
+                    cell("Used", header=True),
+                    cell("Left", header=True),
+                ],
+                [
+                    cell("Today"),
+                    cell(format_tokens(allowance.daily_used)),
+                    cell(format_tokens(allowance.daily_left)),
+                ],
+                [
+                    cell("This month"),
+                    cell(format_tokens(allowance.monthly_used)),
+                    cell(format_tokens(allowance.monthly_left)),
+                ],
+            ]
+            blocks.append(InputRichBlockTable(cells=rows, is_bordered=True, is_striped=True))
+            blocks.append(
+                InputRichBlockParagraph(
+                    text=f"Free tokens are used before {SPARKS_NAME}. They reset every day "
+                    "and every month, in UTC."
+                )
+            )
         if entries:
             rows = [[cell("Change", header=True), cell("What", header=True)]]
             for entry, label in entries:
@@ -315,16 +355,26 @@ class RichMessages:
         user_id: int,
         owner: bool,
         notice: str | None = None,
+        complimentary: bool = False,
+        allowance: Allowance | None = None,
     ) -> InputRichMessage:
         blocks: list[InputRichBlockUnion] = [InputRichBlockSectionHeading(text="Account", size=2)]
         if notice:
             blocks.append(InputRichBlockParagraph(text=notice))
-        paragraph = (
-            f"Owner access. {SPARKS_NAME} are not charged."
-            if owner
-            else f"Your balance: {format_amount(balance)}"
-        )
+        if owner:
+            paragraph = f"Owner access. {SPARKS_NAME} are not charged."
+        elif complimentary:
+            paragraph = f"Free access. {SPARKS_NAME} are not charged."
+        else:
+            paragraph = f"Your balance: {format_amount(balance)}"
         blocks.append(InputRichBlockParagraph(text=paragraph))
+        if allowance is not None:
+            blocks.append(
+                InputRichBlockParagraph(
+                    text=f"Free allowance: {format_tokens(allowance.daily_left)} of "
+                    f"{format_tokens(allowance.daily_limit)} tokens left today."
+                )
+            )
         if sponsor_id is None:
             detail = "No sponsor. Each person pays for their own requests."
         elif sponsor_id == user_id:
@@ -652,12 +702,19 @@ class RichMessages:
             blocks.append(InputRichBlockParagraph(text=balance))
         if in_group:
             if group_effect == "allow":
-                status = "This group is allowlisted."
+                status = "This group has free access. Sparks are not charged."
             elif group_effect == "ban":
                 status = "This group is banned."
             else:
-                status = "This group is not allowlisted."
+                status = "This group is on paid access. Each person pays for their own requests."
             blocks.append(InputRichBlockParagraph(text=status))
+        elif show_entries:
+            blocks.append(
+                InputRichBlockParagraph(
+                    text="Every chat is open by default and people pay for their own requests. "
+                    "An allow entry gives free, uncharged use to a person or a whole group."
+                )
+            )
         if not show_entries:
             return InputRichMessage(blocks=blocks)
         if not entries:
@@ -862,15 +919,12 @@ class RichMessages:
     @staticmethod
     def connector_picker(name: str, groups: Sequence[KnownGroup]) -> InputRichMessage:
         if groups:
-            body: RichTextUnion = (
-                "Pick a group. Skye only lists allowlisted groups where you have written."
-            )
+            body: RichTextUnion = "Pick a group where you have written."
         else:
             body = [
-                "Skye only knows groups where you have written while the bot is allowlisted. "
-                "In a group, open ",
+                "Skye only knows groups where you have written. Write in a group, then open ",
                 _code("/settings"),
-                " and tap Attach one of mine.",
+                " there and tap Attach one of mine.",
             ]
         return RichMessages.prompt(f"Share {name}", body)
 

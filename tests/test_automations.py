@@ -18,6 +18,7 @@ from skye.automations import (
 )
 from skye.db import Database
 from skye.models import RequestContext, Scope
+from skye.quota import Allowance
 from skye.rich import RichMessages
 from skye.runtime import AgentRuntime, RunOutput
 from skye.telegram import TelegramApp
@@ -478,6 +479,7 @@ async def test_fire_uses_runtime_and_created_by() -> None:
         complimentary=AsyncMock(return_value=False),
         exhausted=AsyncMock(return_value=False),
         record=AsyncMock(),
+        allowance=AsyncMock(return_value=Allowance(0, 20_000, 0, 400_000)),
     )
     app.runtime = FakeRuntime()
     app.database = SimpleNamespace(

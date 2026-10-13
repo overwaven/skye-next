@@ -23,6 +23,7 @@ from aiogram.types import (
 from skye.artifacts import GeneratedFile
 from skye.group_context import GroupHistory
 from skye.models import AccessEntry, RequestContext, Scope
+from skye.quota import Allowance
 from skye.rich import RichMessages
 from skye.runtime import AgentRuntime, RunOutput
 from skye.sparks import SPARK_SCALE
@@ -199,22 +200,21 @@ async def test_undirected_group_message_does_not_check_access() -> None:
     app._require_access.assert_not_awaited()
 
 
-async def test_group_without_plus_admin_points_to_private_account() -> None:
-    from skye.telegram import GROUP_NEEDS_PLUS
-
+async def test_banned_group_sees_chat_ban_copy() -> None:
     app = telegram_app()
     app.access = SimpleNamespace(allowed=AsyncMock(return_value=False))
-    app.database = SimpleNamespace(access_effect=AsyncMock(return_value=None))
+
+    async def access_effect(scope: Scope) -> str | None:
+        return "ban" if scope.kind == "chat" else None
+
+    app.database = SimpleNamespace(access_effect=AsyncMock(side_effect=access_effect))
     app.rich = SimpleNamespace(send=AsyncMock())
     incoming = group_message("@skye_example_bot help")
     context = app._context(incoming)
     assert context is not None
 
     assert await app._require_access(incoming, context) is False
-    app.rich.send.assert_awaited_once_with(incoming, GROUP_NEEDS_PLUS)
-    assert "sponsor" in GROUP_NEEDS_PLUS.lower()
-    assert "/account" in GROUP_NEEDS_PLUS
-    assert "token" not in GROUP_NEEDS_PLUS.lower()
+    app.rich.send.assert_awaited_once_with(incoming, "This chat is banned.")
 
 
 async def test_banned_group_member_sees_ban_copy() -> None:
@@ -550,6 +550,7 @@ async def test_stream_turn_posts_send_message_bubbles_not_final_output() -> None
         complimentary=AsyncMock(return_value=False),
         exhausted=AsyncMock(return_value=False),
         record=AsyncMock(),
+        allowance=AsyncMock(return_value=Allowance(0, 20_000, 0, 400_000)),
     )
     app.runtime = ReplyRuntime()  # type: ignore[assignment]
     app.database = SimpleNamespace(
@@ -618,6 +619,7 @@ async def test_stream_turn_can_send_during_a_tool_run() -> None:
         complimentary=AsyncMock(return_value=False),
         exhausted=AsyncMock(return_value=False),
         record=AsyncMock(),
+        allowance=AsyncMock(return_value=Allowance(0, 20_000, 0, 400_000)),
     )
     app.runtime = WorkingRuntime()  # type: ignore[assignment]
     app.database = SimpleNamespace(
@@ -749,6 +751,7 @@ async def test_stream_turn_passes_reply_to_through_send_message() -> None:
         complimentary=AsyncMock(return_value=False),
         exhausted=AsyncMock(return_value=False),
         record=AsyncMock(),
+        allowance=AsyncMock(return_value=Allowance(0, 20_000, 0, 400_000)),
     )
     app.runtime = QuoteRuntime()  # type: ignore[assignment]
     app.database = SimpleNamespace(
@@ -800,11 +803,13 @@ async def test_stream_turn_sends_standalone_and_quoted_voice_messages() -> None:
         charge=AsyncMock(return_value=True),
     )
     app.quota = SimpleNamespace(
-        complimentary=AsyncMock(return_value=False),
+        complimentary=AsyncMock(return_value=True),
         exhausted=AsyncMock(return_value=False),
         record=AsyncMock(),
+        allowance=AsyncMock(return_value=Allowance(0, 20_000, 0, 400_000)),
     )
     app.runtime = VoiceRuntime()  # type: ignore[assignment]
+    app.growth = SimpleNamespace(completed_task=AsyncMock(return_value=False))
     app.database = SimpleNamespace(
         get_settings=AsyncMock(return_value=ChatSettings("gpt-5.6-luna", "medium"))
     )
@@ -859,6 +864,7 @@ async def test_hidden_turn_stays_quiet_without_send_message_or_media() -> None:
         complimentary=AsyncMock(return_value=False),
         exhausted=AsyncMock(return_value=False),
         record=AsyncMock(),
+        allowance=AsyncMock(return_value=Allowance(0, 20_000, 0, 400_000)),
     )
     app.runtime = QuietRuntime()  # type: ignore[assignment]
     app.database = SimpleNamespace(
@@ -1338,6 +1344,7 @@ async def test_stream_turn_offers_retry_after_a_failure() -> None:
         complimentary=AsyncMock(return_value=False),
         exhausted=AsyncMock(return_value=False),
         record=AsyncMock(),
+        allowance=AsyncMock(return_value=Allowance(0, 20_000, 0, 400_000)),
     )
     app.runtime = FailingRuntime()  # type: ignore[assignment]
     app.database = SimpleNamespace(
@@ -1433,3 +1440,45 @@ async def test_resolve_admin_user_reads_ids_and_handles() -> None:
         await app._resolve_admin_user("-100")
     with pytest.raises(ValueError, match="numeric"):
         await app._resolve_admin_user(None)
+
+
+async def test_show_free_spend_reports_tokens_left() -> None:
+    from skye.models import ChatSettings
+
+    app = telegram_app()
+    app.database = SimpleNamespace(
+        get_settings=AsyncMock(return_value=ChatSettings("gpt-5.6-luna", "medium"))
+    )
+    app.quota = SimpleNamespace(
+        allowance=AsyncMock(return_value=Allowance(1_000, 20_000, 1_000, 400_000))
+    )
+    app.rich = SimpleNamespace(send=AsyncMock())
+    incoming = private_message("hi")
+    context = app._context(incoming)
+    assert context is not None
+
+    await app._show_free_spend(context, incoming, 1)
+
+    app.rich.send.assert_awaited_once()
+    assert "19k of 20k tokens left today" in app.rich.send.await_args.args[1]
+
+
+async def test_show_free_spend_respects_the_display_toggle() -> None:
+    from skye.models import ChatSettings
+
+    app = telegram_app()
+    app.database = SimpleNamespace(
+        get_settings=AsyncMock(
+            return_value=ChatSettings("gpt-5.6-luna", "medium", sparks_display=False)
+        )
+    )
+    app.quota = SimpleNamespace(allowance=AsyncMock())
+    app.rich = SimpleNamespace(send=AsyncMock())
+    incoming = private_message("hi")
+    context = app._context(incoming)
+    assert context is not None
+
+    await app._show_free_spend(context, incoming, 1)
+
+    app.rich.send.assert_not_awaited()
+    app.quota.allowance.assert_not_awaited()

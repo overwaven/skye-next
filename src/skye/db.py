@@ -2136,10 +2136,10 @@ class Database:
         cursor = await self.conn.execute(
             """SELECT m.chat_id, COALESCE(k.title, 'Group') AS title
                FROM group_messages AS m
-               JOIN access_entries AS a
-                 ON a.kind = 'chat' AND a.telegram_id = m.chat_id AND a.effect = 'allow'
                LEFT JOIN known_chats AS k ON k.chat_id = m.chat_id
-               WHERE m.sender_id = ?
+               LEFT JOIN access_entries AS a
+                 ON a.kind = 'chat' AND a.telegram_id = m.chat_id
+               WHERE m.sender_id = ? AND (a.effect IS NULL OR a.effect != 'ban')
                GROUP BY m.chat_id
                ORDER BY lower(title), m.chat_id""",
             (user_id,),

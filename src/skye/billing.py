@@ -27,6 +27,7 @@ from aiogram.types import (
 from .access import AccessService
 from .db import Database
 from .models import RequestContext, WalletEntry
+from .quota import QuotaService
 from .rich import RichMessages
 from .sparks import (
     PACKAGES,
@@ -150,12 +151,14 @@ class AccountPanel:
         access: AccessService,
         rich: RichMessages,
         bot: Bot,
+        quota: QuotaService,
     ) -> None:
         self.billing = billing
         self.sparks = sparks
         self.access = access
         self.rich = rich
         self.bot = bot
+        self.quota = quota
 
     async def show(
         self,
@@ -176,6 +179,8 @@ class AccountPanel:
         balance = await self.sparks.balance(context.user_id)
         ledger = await self.sparks.ledger(context.user_id, limit=LEDGER_LIMIT)
         settings = await self.database_settings(context)
+        complimentary = await self.quota.complimentary(context)
+        allowance = None if complimentary else await self.quota.allowance(context.user_id)
         rows = [(entry, _ledger_label(entry)) for entry in ledger]
         content = self.rich.sparks_account(
             balance=balance,
@@ -183,6 +188,8 @@ class AccountPanel:
             show_spend=settings,
             owner=owner,
             notice=notice,
+            complimentary=complimentary,
+            allowance=allowance,
         )
         await self._render(message, context, content, self._private_keyboard(settings), edit)
 
@@ -307,15 +314,19 @@ class AccountPanel:
         edit: bool,
     ) -> None:
         if not await self.access.allowed(context):
-            raise BillingError("Skye is not enabled in this chat.")
+            raise BillingError("This chat is banned.")
         balance = await self.sparks.balance(context.user_id)
         sponsor = await self.sparks.sponsor(context.chat_id)
+        complimentary = await self.quota.complimentary(context)
+        allowance = None if complimentary else await self.quota.allowance(context.user_id)
         content = self.rich.sparks_group(
             balance=balance,
             sponsor_id=sponsor,
             user_id=context.user_id,
             owner=owner,
             notice=notice,
+            complimentary=complimentary,
+            allowance=allowance,
         )
         keyboard = self._group_keyboard(sponsor, context.user_id)
         await self._render(message, context, content, keyboard, edit)
@@ -336,7 +347,11 @@ class AccountPanel:
     async def _banned(self, context: RequestContext) -> bool:
         if self.access.is_owner(context.user_id):
             return False
-        return await self.billing.database.access_effect(context.scope) == "ban"
+        if await self.access.banned(context.user_id):
+            return True
+        if context.chat_type != "private":
+            return await self.billing.database.access_effect(context.scope) == "ban"
+        return False
 
     async def _invoice_link(self, package: SparkPackage, user_id: int) -> str:
         prices = [LabeledPrice(label=package.name, amount=package.stars)]

@@ -1,8 +1,10 @@
 """Access: who may talk to Skye.
 
-Private chat is open to any non-banned user. A group is enabled only when the
-owner allowlists it or a member volunteers to sponsor it; payment inside an
-enabled chat is handled by :mod:`skye.sparks`.
+Private chat is open to any non-banned user, and a group is open by default:
+everyone there can talk to Skye and each person pays for their own requests.
+The allowlist no longer gates a chat; an ``allow`` entry grants a person or a
+whole group *free, uncharged* use instead. A ban still blocks a person or a
+chat entirely. Payment inside a group is handled by :mod:`skye.sparks`.
 """
 
 from __future__ import annotations
@@ -31,6 +33,5 @@ class AccessService:
             return False
         if context.chat_type == "private":
             return True
-        if await self.database.access_effect(context.scope) == "allow":
-            return True
-        return await self.database.chat_sponsor(context.chat_id) is not None
+        # A group is open to everyone unless the group itself is banned.
+        return await self.database.access_effect(context.scope) != "ban"
