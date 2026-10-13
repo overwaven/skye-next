@@ -27,9 +27,13 @@ docker compose up -d --build --remove-orphans
 
 release_into() {
   local src=$1 root=$2
-  mkdir -p "$root/releases/$RELEASE"
-  rsync -a --delete --exclude '.DS_Store' "$src/" "$root/releases/$RELEASE/"
-  ln -sfn "$root/releases/$RELEASE" "$root/current"
+  local dir="$root/releases/$RELEASE"
+  mkdir -p "$dir"
+  rsync -a --delete --exclude '.DS_Store' "$src/" "$dir/"
+  # rsync copies the source directory's mtime, so the fresh release would sort
+  # as the oldest and be pruned by the "newest five" sweep below. Stamp it.
+  touch "$dir"
+  ln -sfn "$dir" "$root/current"
   ls -1dt "$root/releases"/* | tail -n +6 | xargs -r rm -rf
 }
 
