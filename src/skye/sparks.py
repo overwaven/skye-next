@@ -17,6 +17,10 @@ from .pricing import SPARK_SCALE, PricingService, TurnUsage
 
 SPARKS_NAME = "Sparks"
 SPARKS_SYMBOL = "✦"
+# The base emoji of the Skye Icons sparkle. Rich-message custom emoji only
+# accept exactly one emoji (or none) as alternative text, so this is what
+# falls back on clients that cannot render the custom emoji.
+SPARKS_EMOJI = "✨"
 
 # A sane ceiling for a single owner adjustment, kept well inside SQLite's int64.
 MAX_AMOUNT_MILLI = 1_000_000_000 * SPARK_SCALE

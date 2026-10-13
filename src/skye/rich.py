@@ -48,7 +48,7 @@ from .models import (
     WalletEntry,
 )
 from .quota import Allowance
-from .sparks import SPARKS_NAME, SPARKS_SYMBOL, format_milli
+from .sparks import SPARKS_EMOJI, SPARKS_NAME, format_milli
 from .telegram_threads import api_thread_id, quote_reply, reply_parameters
 from .ui import Icon, activity_message, decorate_keyboard
 
@@ -59,11 +59,11 @@ def _voice_filename(audio: bytes) -> str:
 
 
 def sparks_mark() -> RichTextCustomEmoji:
-    """The Sparks glyph as a custom emoji, with ``✦`` as the fallback text."""
+    """The Sparks glyph as a custom emoji, falling back to ``✨`` as plain text."""
 
     return RichTextCustomEmoji(
         custom_emoji_id=Icon.SPARKLES,
-        alternative_text=SPARKS_SYMBOL,
+        alternative_text=SPARKS_EMOJI,
     )
 
 

@@ -513,7 +513,7 @@ def test_sparks_amount_uses_the_icon_custom_emoji() -> None:
     mark = sparks_mark()
     assert isinstance(mark, RichTextCustomEmoji)
     assert mark.custom_emoji_id == Icon.SPARKLES
-    assert mark.alternative_text == "✦"
+    assert mark.alternative_text == "✨"
 
     assert sparks_amount(12_500) == ["12.5", " ", mark]
 
