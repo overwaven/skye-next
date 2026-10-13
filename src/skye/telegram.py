@@ -5,6 +5,7 @@ import io
 import json
 import re
 from collections.abc import Awaitable, Callable, Sequence
+from dataclasses import dataclass
 from typing import Any, Literal, cast
 
 import structlog
@@ -74,7 +75,15 @@ from .runtime import (
     leftover_reply,
 )
 from .skills import SkillError, SkillPanel, SkillService, SkillWizard
-from .sparks import SPARKS_NAME, SPARKS_SYMBOL, SparkService, format_milli
+from .sparks import (
+    SPARKS_NAME,
+    SPARKS_SYMBOL,
+    SparkError,
+    SparkService,
+    format_amount,
+    format_milli,
+    parse_amount,
+)
 from .telegram_activity import TelegramActivity, TelegramChatAction
 from .telegram_projects import (
     PROJECT_KEYBOARD_CATCHUP,
@@ -96,10 +105,20 @@ GROUP_NEEDS_PLUS = (
     "sponsor it from /account."
 )
 AdminAction = Literal["allow", "ban", "remove"]
+BalanceAction = Literal["add", "sub"]
 CATCHUP_PROMPT = (
     "Catch me up on this conversation: where things stand, open threads, and decisions. "
     "Be concise. Do not start new work."
 )
+
+
+@dataclass(slots=True)
+class RetryTurn:
+    """The most recent user request that failed, kept for ``/retry``."""
+
+    user_input: str | list[TResponseInputItem]
+    conversation_id: str | None
+    extra_instructions: str
 
 
 class AgentWizard(StatesGroup):
@@ -111,6 +130,7 @@ class AgentWizard(StatesGroup):
 
 class AdminPrompt(StatesGroup):
     target = State()
+    amount = State()
 
 
 class UpdateMiddleware(BaseMiddleware):
@@ -137,6 +157,14 @@ class UpdateMiddleware(BaseMiddleware):
             if incoming:
                 await self.media_groups.capture(incoming)
                 await self.groups.capture(incoming)
+                sender = incoming.from_user
+                if sender is not None:
+                    name = " ".join(
+                        part for part in (sender.first_name, sender.last_name) if part
+                    )
+                    await self.database.remember_user(
+                        sender.id, sender.username, name or sender.username or ""
+                    )
             result = await handler(event, data)
         except Exception as error:
             await self.database.finish_update(event.update_id, type(error).__name__)
@@ -194,6 +222,7 @@ class TelegramApp:
             AutomationPanel(automations, self.rich) if automations is not None else None
         )
         self._automation_tasks: set[asyncio.Task[None]] = set()
+        self._retryable: dict[tuple[int, int], RetryTurn] = {}
         self.router = Router(name="skye")
         self._register()
 
@@ -219,6 +248,7 @@ class TelegramApp:
         )
         self.router.message.register(self.reset, Command("reset"))
         self.router.message.register(self.stop, Command("stop"))
+        self.router.message.register(self.retry, Command("retry"))
         self.router.message.register(self.admin, Command("admin"))
         self.router.callback_query.register(self.settings_callback, F.data.startswith("settings:"))
         self.router.callback_query.register(self.account_callback, F.data.startswith("acct:"))
@@ -257,6 +287,7 @@ class TelegramApp:
             ),
         )
         self.router.message.register(self.admin_prompt, StateFilter(AdminPrompt.target))
+        self.router.message.register(self.admin_amount, StateFilter(AdminPrompt.amount))
         self.router.pre_checkout_query.register(self.pre_checkout)
         self.router.message.register(self.successful_payment, F.successful_payment)
         self.router.message.register(self.refunded_payment, F.refunded_payment)
@@ -309,6 +340,7 @@ class TelegramApp:
             "/agents — create, install, select, and share agents\n\n"
             "/catchup — summarize this conversation\n\n"
             "/reset — new conversation\n\n"
+            "/retry — retry the last request that failed\n\n"
             "/stop — cancel the active task\n\n"
             "A few useful links.",
             reply_markup=self._help_keyboard(),
@@ -990,6 +1022,7 @@ class TelegramApp:
         context = self._context(message)
         if context is None or not await self._require_access(message, context):
             return
+        self._forget_retry(context)
         if context.chat_type == "private":
             project = await self.telegram_projects.active(context.user_id)
             await self.telegram_projects.reset(context.user_id, project.id)
@@ -1008,6 +1041,48 @@ class TelegramApp:
             return
         stopped = self.runtime.stop(context.chat_id, context.thread_id)
         await self.rich.send(message, "Stopping…" if stopped else "Nothing is running here.")
+
+    async def retry(self, message: Message) -> None:
+        context = self._context(message)
+        if context is None or not await self._require_access(message, context):
+            return
+        pending = self._retryable_store().pop(self._retry_key(context), None)
+        if pending is None:
+            await self.rich.send(
+                message, "There is nothing to retry. I keep only the last request that failed."
+            )
+            return
+        await self._stream_turn(
+            message,
+            context,
+            pending.user_input,
+            conversation_id=pending.conversation_id,
+            extra_instructions=pending.extra_instructions,
+        )
+
+    def _retry_key(self, context: RequestContext) -> tuple[int, int]:
+        return (context.chat_id, context.thread_id)
+
+    def _retryable_store(self) -> dict[tuple[int, int], RetryTurn]:
+        store: dict[tuple[int, int], RetryTurn] | None = getattr(self, "_retryable", None)
+        if store is None:
+            store = {}
+            self._retryable = store
+        return store
+
+    def _remember_retry(
+        self,
+        context: RequestContext,
+        user_input: str | list[TResponseInputItem],
+        conversation_id: str | None,
+        extra_instructions: str,
+    ) -> None:
+        self._retryable_store()[self._retry_key(context)] = RetryTurn(
+            user_input, conversation_id, extra_instructions
+        )
+
+    def _forget_retry(self, context: RequestContext) -> None:
+        self._retryable_store().pop(self._retry_key(context), None)
 
     async def admin(self, message: Message, state: FSMContext) -> None:
         context = self._context(message)
@@ -1067,11 +1142,33 @@ class TelegramApp:
                     RichMessages.admin_prompt(prompt_action),
                     reply_markup=self._admin_cancel_keyboard(),
                 )
+            elif len(action) == 3 and action[:2] == ["admin", "askbal"]:
+                if context.chat_type != "private":
+                    raise PermissionError("Manage the full allowlist in a private chat.")
+                prompt_action = action[2]
+                if prompt_action not in {"add", "sub"}:
+                    raise ValueError("Unknown admin action.")
+                await state.set_state(AdminPrompt.target)
+                await state.set_data(
+                    {
+                        "action": f"bal_{prompt_action}",
+                        "prompt_message_id": callback.message.message_id,
+                    }
+                )
+                await self.rich.edit(
+                    callback.message,
+                    RichMessages.admin_balance_target_prompt(prompt_action),
+                    reply_markup=self._admin_cancel_keyboard(),
+                )
             elif len(action) == 4 and action[:2] == ["admin", "open"]:
                 if context.chat_type != "private":
                     raise PermissionError("Manage the full allowlist in a private chat.")
                 target = self._admin_scope(action[2], action[3])
                 await self._show_admin_entry(callback.message, context, target)
+            elif len(action) == 4 and action[:2] == ["admin", "bal"]:
+                await self._admin_balance(
+                    callback.message, context, state, action[2], action[3]
+                )
             elif len(action) == 5 and action[:2] == ["admin", "set"]:
                 target = self._admin_scope(action[3], action[4])
                 if context.chat_type != "private" and target.kind != "user":
@@ -1103,6 +1200,23 @@ class TelegramApp:
         prompt = self._admin_prompt_reply(message, data.get("prompt_message_id"))
         if prompt is None:
             return UNHANDLED
+        if action in {"bal_add", "bal_sub"}:
+            try:
+                user_id = await self._resolve_admin_user(message.text)
+            except ValueError as error:
+                await self.rich.send(message, str(error))
+                return None
+            op: BalanceAction = "add" if action == "bal_add" else "sub"
+            await state.set_state(AdminPrompt.amount)
+            await state.set_data(
+                {"action": op, "user_id": user_id, "prompt_message_id": prompt.message_id}
+            )
+            await self.rich.edit(
+                prompt,
+                RichMessages.admin_balance_prompt(op, user_id),
+                reply_markup=self._admin_cancel_keyboard(),
+            )
+            return None
         if action not in {"allow", "ban", "remove"}:
             await state.clear()
             await self.rich.send(message, "That admin action is no longer active.")
@@ -1123,6 +1237,95 @@ class TelegramApp:
         await self._show_admin(prompt, context, notice=notice)
         return None
 
+    async def _admin_balance(
+        self,
+        message: Message,
+        context: RequestContext,
+        state: FSMContext,
+        action: str,
+        raw_id: str,
+    ) -> None:
+        user_id = self._admin_user_id(raw_id)
+        if action == "reset":
+            removed = await self.sparks.reset_balance(user_id, reason="Reset by owner")
+            balance = await self.sparks.balance(user_id)
+            notice = (
+                f"Reset. Removed {format_amount(removed)}. "
+                f"Balance: {format_amount(balance)}."
+                if removed
+                else "The balance is already empty."
+            )
+            await self._show_admin(message, context, notice=notice)
+            return
+        if action not in {"add", "sub"}:
+            raise ValueError("Unknown admin action.")
+        await state.set_state(AdminPrompt.amount)
+        await state.set_data(
+            {
+                "action": action,
+                "user_id": user_id,
+                "prompt_message_id": message.message_id,
+            }
+        )
+        await self.rich.edit(
+            message,
+            RichMessages.admin_balance_prompt(action, user_id),
+            reply_markup=self._admin_cancel_keyboard(),
+        )
+
+    async def admin_amount(self, message: Message, state: FSMContext) -> Any:
+        context = self._context(message)
+        if context is None or not self.access.is_owner(context.user_id):
+            await state.clear()
+            return None
+        data = await state.get_data()
+        action = data.get("action")
+        prompt = self._admin_prompt_reply(message, data.get("prompt_message_id"))
+        if prompt is None:
+            return UNHANDLED
+        target_id = data.get("user_id")
+        if action not in {"add", "sub"} or not isinstance(target_id, int):
+            await state.clear()
+            await self.rich.send(message, "That admin action is no longer active.")
+            return None
+        try:
+            milli = parse_amount(message.text or "")
+        except SparkError as error:
+            await self.rich.send(message, str(error))
+            return None
+        await state.clear()
+        try:
+            notice = await self._apply_balance(context.user_id, action, target_id, milli)
+        except (PermissionError, ValueError) as error:
+            await self.rich.send(message, str(error))
+            return None
+        await self._show_admin(prompt, context, notice=notice)
+        return None
+
+    async def _apply_balance(
+        self, actor_id: int, action: BalanceAction, user_id: int, milli: int
+    ) -> str:
+        if action == "add":
+            balance = await self.sparks.grant(
+                user_id, milli, reason="Added by owner", reference=f"admin:{actor_id}"
+            )
+            return f"Added {format_amount(milli)}. Balance: {format_amount(balance)}."
+        if action == "sub":
+            current = await self.sparks.balance(user_id)
+            removed = min(milli, current)
+            if removed <= 0:
+                return "The balance is already empty."
+            if not await self.sparks.revoke(
+                user_id, removed, reason="Removed by owner", reference=f"admin:{actor_id}"
+            ):
+                balance = await self.sparks.balance(user_id)
+                return f"The balance is only {format_amount(balance)}. Nothing removed."
+            return (
+                f"Removed {format_amount(removed)}. "
+                f"Balance: {format_amount(current - removed)}."
+            )
+        raise ValueError("Unknown admin action.")
+
     async def _show_admin(
         self,
         message: Message,
@@ -1142,14 +1345,23 @@ class TelegramApp:
                 None,
             )
         visible = () if in_group else entries
+        reply_balance: int | None = None
+        balance_line: str | None = None
+        if reply_user is not None:
+            name = (reply_user.first_name or "user")[:20]
+            reply_balance = await self.sparks.balance(reply_user.id)
+            balance_line = f"{name}: {format_amount(reply_balance)}."
         content = RichMessages.access(
             visible,
             notice=notice,
             group_effect=group_effect,
             in_group=in_group,
             show_entries=not in_group,
+            balance=balance_line,
         )
-        markup = self._admin_home_keyboard(context, visible, reply_user, group_effect)
+        markup = self._admin_home_keyboard(
+            context, visible, reply_user, group_effect, reply_balance
+        )
         if edit:
             await self.rich.edit(message, content, reply_markup=markup)
         else:
@@ -1228,6 +1440,7 @@ class TelegramApp:
             attachments=attachments,
             chat_type=context.chat_type,
         )
+        self._forget_retry(context)
         await self._stream_turn(
             message,
             context,
@@ -1394,6 +1607,12 @@ class TelegramApp:
                 )
             sent_holder["count"] += 1
 
+        def remember_failed() -> None:
+            if message is not None:
+                self._remember_retry(context, user_input, conversation_id, extra_instructions)
+
+        retry_hint = " Send /retry to try again." if message is not None else ""
+
         try:
             async with activity:
                 output = await self.runtime.run(
@@ -1444,8 +1663,12 @@ class TelegramApp:
         except TimeoutError:
             if sent_holder["count"] == 0:
                 await self._finish_turn(
-                    message, context, placeholder, "This took too long, so I stopped it."
+                    message,
+                    context,
+                    placeholder,
+                    f"This took too long, so I stopped it.{retry_hint}",
                 )
+                remember_failed()
         except asyncio.CancelledError:
             if sent_holder["count"] == 0 and awaiting_reply:
                 await self._finish_turn(message, context, placeholder, "Stopped.")
@@ -1453,12 +1676,17 @@ class TelegramApp:
                 await self.rich.delete(placeholder)
         except ContextLimitError as error:
             if sent_holder["count"] == 0:
-                await self._finish_turn(message, context, placeholder, str(error))
+                await self._finish_turn(message, context, placeholder, f"{error}{retry_hint}")
+                remember_failed()
         except StreamStartedError:
             if sent_holder["count"] == 0 and awaiting_reply:
                 await self._finish_turn(
-                    message, context, placeholder, "The response was interrupted. Try again."
+                    message,
+                    context,
+                    placeholder,
+                    f"The response was interrupted. Try again.{retry_hint}",
                 )
+                remember_failed()
             elif placeholder is not None and sent_holder["count"] == 0:
                 await self.rich.delete(placeholder)
         except Exception as error:
@@ -1471,8 +1699,12 @@ class TelegramApp:
             )
             if sent_holder["count"] == 0:
                 await self._finish_turn(
-                    message, context, placeholder, "Something went wrong. Please try again."
+                    message,
+                    context,
+                    placeholder,
+                    f"Something went wrong. Please try again.{retry_hint}",
                 )
+                remember_failed()
 
     async def _thinking(self, message: Message | None, context: RequestContext) -> Message:
         if message is not None:
@@ -1896,12 +2128,44 @@ class TelegramApp:
             raise ValueError("Unknown admin target.")
         return Scope(expected, telegram_id)
 
+    async def _resolve_admin_user(self, raw: str | None) -> int:
+        text = (raw or "").strip()
+        if not text:
+            raise ValueError("Reply with a numeric Telegram id or an @username.")
+        candidate = text[1:] if text.startswith("@") else text
+        try:
+            telegram_id = int(candidate)
+        except ValueError:
+            pass
+        else:
+            if telegram_id < 0:
+                raise ValueError("Balance applies to a person, not a chat.")
+            return telegram_id
+        user_id = await self.database.find_user_by_username(candidate)
+        if user_id is None:
+            raise ValueError(
+                f"I don't know @{candidate} yet. Ask them to message me, "
+                "or use their numeric id."
+            )
+        return user_id
+
+    @staticmethod
+    def _admin_user_id(raw_id: str) -> int:
+        try:
+            telegram_id = int(raw_id)
+        except ValueError as error:
+            raise ValueError("Unknown admin target.") from error
+        if telegram_id < 0:
+            raise ValueError("Balance applies to a person, not a chat.")
+        return telegram_id
+
     @staticmethod
     def _admin_home_keyboard(
         context: RequestContext,
         entries: Sequence[AccessEntry],
         reply_user: User | None,
         group_effect: AccessEffect | None,
+        reply_balance: int | None = None,
     ) -> InlineKeyboardMarkup:
         rows: list[list[InlineKeyboardButton]] = []
         if context.chat_type in {"group", "supergroup"}:
@@ -1932,6 +2196,27 @@ class TelegramApp:
                     ),
                 ]
             )
+            rows.append(
+                [
+                    InlineKeyboardButton(
+                        text="Add Sparks",
+                        callback_data=f"admin:bal:add:{reply_user.id}",
+                    ),
+                    InlineKeyboardButton(
+                        text="Subtract Sparks",
+                        callback_data=f"admin:bal:sub:{reply_user.id}",
+                    ),
+                ]
+            )
+            if reply_balance:
+                rows.append(
+                    [
+                        InlineKeyboardButton(
+                            text="Reset Sparks to 0",
+                            callback_data=f"admin:bal:reset:{reply_user.id}",
+                        )
+                    ]
+                )
         if context.chat_type == "private":
             rows.append(
                 [
@@ -1940,6 +2225,16 @@ class TelegramApp:
                 ]
             )
             rows.append([InlineKeyboardButton(text="Remove", callback_data="admin:ask:remove")])
+            rows.append(
+                [
+                    InlineKeyboardButton(
+                        text="Add Sparks by id", callback_data="admin:askbal:add"
+                    ),
+                    InlineKeyboardButton(
+                        text="Subtract Sparks by id", callback_data="admin:askbal:sub"
+                    ),
+                ]
+            )
             rows.extend(
                 [
                     [
@@ -2229,6 +2524,7 @@ COMMANDS = [
     BotCommand(command="settings", description="Model, agent, memory, connectors, and skills"),
     BotCommand(command="agents", description="Create and manage agents"),
     BotCommand(command="reset", description="Start a new conversation"),
+    BotCommand(command="retry", description="Retry the last failed request"),
     BotCommand(command="stop", description="Stop the active task"),
     BotCommand(command="admin", description="Manage access (owner)"),
 ]
@@ -2242,6 +2538,7 @@ PRIVATE_COMMANDS = [
     BotCommand(command="agents", description="Create and manage agents"),
     BotCommand(command="catchup", description="Summarize this conversation"),
     BotCommand(command="reset", description="Start a new conversation"),
+    BotCommand(command="retry", description="Retry the last failed request"),
     BotCommand(command="stop", description="Stop the active task"),
     BotCommand(command="admin", description="Manage access (owner)"),
 ]

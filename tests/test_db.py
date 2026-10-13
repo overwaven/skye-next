@@ -57,6 +57,17 @@ async def test_list_access_returns_typed_entries(database: Database) -> None:
     ]
 
 
+async def test_user_directory_resolves_handles(database: Database) -> None:
+    await database.remember_user(42, "Alice", "Alice Example")
+    # A later sighting without a username keeps the handle we already know.
+    await database.remember_user(42, None, "Alice Example")
+
+    assert await database.find_user_by_username("@alice") == 42
+    assert await database.find_user_by_username("ALICE") == 42
+    assert await database.find_user_by_username("@nobody") is None
+    assert await database.find_user_by_username("@") is None
+
+
 async def test_user_ban_wins_inside_allowed_group(database: Database) -> None:
     access = AccessService(database, frozenset({1}))
     await database.set_access(Scope("chat", -100), "allow", created_by=1)

@@ -397,6 +397,8 @@ def _ledger_label(entry: WalletEntry) -> str:
         return "Bonus"
     if entry.kind == "refund":
         return "Refund"
+    if entry.kind == "adjust":
+        return entry.reason or "Adjustment"
     if entry.reason:
         return entry.reason.replace("_", " ")
     return entry.kind

@@ -9,6 +9,7 @@ request in that chat.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from decimal import ROUND_HALF_UP, Decimal, InvalidOperation
 
 from .db import Database
 from .models import RequestContext, WalletEntry
@@ -16,6 +17,9 @@ from .pricing import SPARK_SCALE, PricingService, TurnUsage
 
 SPARKS_NAME = "Sparks"
 SPARKS_SYMBOL = "✦"
+
+# A sane ceiling for a single owner adjustment, kept well inside SQLite's int64.
+MAX_AMOUNT_MILLI = 1_000_000_000 * SPARK_SCALE
 
 # Telegram Stars are ~1 Star ≈ 1.2 ₽; Spark prices are retail, the provider cost
 # of a run is what the pricing layer reports, and the margin is the difference.
@@ -94,6 +98,28 @@ def format_amount(milli: int) -> str:
     return f"{format_milli(milli)} {SPARKS_SYMBOL}"
 
 
+def parse_amount(text: str) -> int:
+    """Parse a human amount such as ``100`` or ``12.5`` into milli-Sparks.
+
+    Accepts a comma as the decimal separator and an optional leading ``+`` so
+    owner balance adjustments are forgiving about how the number is typed.
+    """
+
+    raw = (text or "").strip().replace(",", ".").lstrip("+")
+    try:
+        value = Decimal(raw)
+    except InvalidOperation as error:
+        raise SparkError("Enter the amount as a number, for example 100 or 12.5.") from error
+    if not value.is_finite() or value <= 0:
+        raise SparkError("Enter a positive amount.")
+    milli = int((value * SPARK_SCALE).to_integral_value(rounding=ROUND_HALF_UP))
+    if milli <= 0:
+        raise SparkError("Enter a positive amount.")
+    if milli > MAX_AMOUNT_MILLI:
+        raise SparkError("That amount is too large.")
+    return milli
+
+
 class SparkError(ValueError):
     """User-facing Sparks failure."""
 
@@ -157,6 +183,35 @@ class SparkService:
 
     async def can_afford(self, user_id: int, milli: int = 1) -> bool:
         return await self.balance(user_id) >= milli
+
+    # -- owner adjustments -------------------------------------------------
+
+    async def grant(
+        self, user_id: int, milli: int, *, reason: str, reference: str | None = None
+    ) -> int:
+        """Credit a wallet outside the normal purchase flow, as an adjustment."""
+
+        if milli <= 0:
+            raise SparkError("Adjustment amount must be positive.")
+        return await self.database.credit_wallet(
+            user_id, milli, kind="adjust", reason=reason, reference=reference
+        )
+
+    async def revoke(
+        self, user_id: int, milli: int, *, reason: str, reference: str | None = None
+    ) -> bool:
+        """Debit a wallet as an adjustment. Returns False when it is short."""
+
+        if milli <= 0:
+            return True
+        return await self.database.debit_wallet(
+            user_id, milli, kind="adjust", reason=reason, reference=reference
+        )
+
+    async def reset_balance(self, user_id: int, *, reason: str) -> int:
+        """Zero a wallet in one atomic step. Returns the amount removed."""
+
+        return await self.database.reset_wallet(user_id, reason=reason)
 
     async def ledger(self, user_id: int, limit: int = 10) -> list[WalletEntry]:
         return await self.database.wallet_ledger(user_id, limit=limit)

@@ -25,7 +25,8 @@ from skye.group_context import GroupHistory
 from skye.models import AccessEntry, RequestContext, Scope
 from skye.rich import RichMessages
 from skye.runtime import AgentRuntime, RunOutput
-from skye.telegram import AdminPrompt, TelegramApp, dump_update
+from skye.sparks import SPARK_SCALE
+from skye.telegram import AdminPrompt, RetryTurn, TelegramApp, dump_update
 
 
 def group_message(
@@ -921,6 +922,14 @@ def admin_app(entries: list[AccessEntry] | None = None) -> TelegramApp:
         list_access=AsyncMock(return_value=list(entries or [])),
         set_access=AsyncMock(),
         remove_access=AsyncMock(return_value=True),
+        find_user_by_username=AsyncMock(return_value=None),
+        remember_user=AsyncMock(),
+    )
+    app.sparks = SimpleNamespace(
+        balance=AsyncMock(return_value=0),
+        grant=AsyncMock(return_value=0),
+        revoke=AsyncMock(return_value=True),
+        reset_balance=AsyncMock(return_value=0),
     )
     app.rich = SimpleNamespace(send=AsyncMock(), edit=AsyncMock(), access=RichMessages.access)
     return app
@@ -964,8 +973,20 @@ async def test_admin_opens_keyboard_and_ignores_subcommands() -> None:
     app.database.set_access.assert_not_awaited()
     markup = app.rich.send.await_args.kwargs["reply_markup"]
     labels = button_labels(markup)
-    assert labels == ["Allow", "Ban", "Remove"]
-    assert button_data(markup) == ["admin:ask:allow", "admin:ask:ban", "admin:ask:remove"]
+    assert labels == [
+        "Allow",
+        "Ban",
+        "Remove",
+        "Add Sparks by id",
+        "Subtract Sparks by id",
+    ]
+    assert button_data(markup) == [
+        "admin:ask:allow",
+        "admin:ask:ban",
+        "admin:ask:remove",
+        "admin:askbal:add",
+        "admin:askbal:sub",
+    ]
 
 
 async def test_admin_group_keyboard_does_not_list_other_entries() -> None:
@@ -1146,3 +1167,269 @@ async def test_admin_callback_rejects_non_owner() -> None:
         "This is only available to the bot owner.", show_alert=True
     )
     app.rich.edit.assert_not_awaited()
+
+
+def alice_message() -> Message:
+    return Message(
+        message_id=2,
+        date=0,
+        chat=Chat(id=1, type="private", first_name="Owner"),
+        from_user=User(id=42, is_bot=False, first_name="Alice"),
+        text="hello",
+    )
+
+
+async def test_admin_reply_offers_balance_buttons() -> None:
+    app = admin_app()
+    app.sparks.balance = AsyncMock(return_value=1500)
+
+    await app.admin(private_message("/admin", reply=alice_message()), AsyncMock())
+
+    labels = button_labels(app.rich.send.await_args.kwargs["reply_markup"])
+    data = button_data(app.rich.send.await_args.kwargs["reply_markup"])
+    assert "Add Sparks" in labels
+    assert "Subtract Sparks" in labels
+    assert "Reset Sparks to 0" in labels
+    assert "admin:bal:add:42" in data
+    assert "admin:bal:sub:42" in data
+    assert "admin:bal:reset:42" in data
+    content = app.rich.send.await_args.args[1]
+    assert any("1.5" in str(getattr(block, "text", "")) for block in content.blocks)
+
+
+async def test_admin_reply_hides_reset_when_balance_is_empty() -> None:
+    app = admin_app()
+    app.sparks.balance = AsyncMock(return_value=0)
+
+    await app.admin(private_message("/admin", reply=alice_message()), AsyncMock())
+
+    data = button_data(app.rich.send.await_args.kwargs["reply_markup"])
+    assert "admin:bal:add:42" in data
+    assert "admin:bal:reset:42" not in data
+
+
+async def test_admin_balance_callback_asks_for_an_amount() -> None:
+    app = admin_app()
+    state = AsyncMock()
+    panel = private_message("/admin")
+
+    await app.admin_callback(admin_callback_query("admin:bal:add:42", panel), state)
+
+    state.set_state.assert_awaited_once_with(AdminPrompt.amount)
+    state.set_data.assert_awaited_once_with(
+        {"action": "add", "user_id": 42, "prompt_message_id": 1}
+    )
+    content = app.rich.edit.await_args.args[1]
+    assert content == RichMessages.admin_balance_prompt("add", 42)
+    assert button_data(app.rich.edit.await_args.kwargs["reply_markup"]) == ["admin:cancel"]
+
+
+async def test_admin_amount_credits_the_wallet() -> None:
+    app = admin_app()
+    app.sparks.grant = AsyncMock(return_value=110 * SPARK_SCALE)
+    state = AsyncMock()
+    state.get_data = AsyncMock(
+        return_value={"action": "add", "user_id": 42, "prompt_message_id": 1}
+    )
+    prompt = private_message("Reply to this message with the amount.")
+
+    await app.admin_amount(private_message("100", reply=prompt), state)
+
+    state.clear.assert_awaited_once()
+    app.sparks.grant.assert_awaited_once()
+    assert app.sparks.grant.await_args.args[:2] == (42, 100 * SPARK_SCALE)
+    assert app.rich.edit.await_args.args[0] is prompt
+
+
+async def test_admin_amount_subtracts_only_what_exists() -> None:
+    app = admin_app()
+    app.sparks.balance = AsyncMock(return_value=30 * SPARK_SCALE)
+    app.sparks.revoke = AsyncMock(return_value=True)
+    state = AsyncMock()
+    state.get_data = AsyncMock(
+        return_value={"action": "sub", "user_id": 42, "prompt_message_id": 1}
+    )
+    prompt = private_message("Reply to this message with the amount.")
+
+    await app.admin_amount(private_message("100", reply=prompt), state)
+
+    app.sparks.revoke.assert_awaited_once()
+    assert app.sparks.revoke.await_args.args[:2] == (42, 30 * SPARK_SCALE)
+
+
+async def test_admin_amount_rejects_a_bad_number() -> None:
+    app = admin_app()
+    state = AsyncMock()
+    state.get_data = AsyncMock(
+        return_value={"action": "add", "user_id": 42, "prompt_message_id": 1}
+    )
+    prompt = private_message("Reply to this message with the amount.")
+
+    await app.admin_amount(private_message("not-a-number", reply=prompt), state)
+
+    app.sparks.grant.assert_not_awaited()
+    app.rich.send.assert_awaited_once()
+
+
+async def test_admin_reset_zeroes_the_wallet() -> None:
+    app = admin_app()
+    app.sparks.reset_balance = AsyncMock(return_value=5 * SPARK_SCALE)
+    app.sparks.balance = AsyncMock(return_value=0)
+    panel = private_message("/admin")
+
+    await app.admin_callback(admin_callback_query("admin:bal:reset:42", panel), AsyncMock())
+
+    app.sparks.reset_balance.assert_awaited_once_with(42, reason="Reset by owner")
+    app.rich.edit.assert_awaited_once()
+
+
+def test_admin_user_id_rejects_chats() -> None:
+    assert TelegramApp._admin_user_id("42") == 42
+    with pytest.raises(ValueError, match="person"):
+        TelegramApp._admin_user_id("-100")
+
+
+async def test_retry_without_a_failed_request_says_so() -> None:
+    app = telegram_app()
+    app.access = SimpleNamespace(allowed=AsyncMock(return_value=True))
+    app.rich = SimpleNamespace(send=AsyncMock())
+
+    await app.retry(private_message("/retry"))
+
+    app.rich.send.assert_awaited_once()
+    assert "nothing to retry" in app.rich.send.await_args.args[1].lower()
+
+
+async def test_retry_replays_the_last_failed_request() -> None:
+    app = telegram_app()
+    app.access = SimpleNamespace(allowed=AsyncMock(return_value=True))
+    app.rich = SimpleNamespace(send=AsyncMock())
+    app._stream_turn = AsyncMock()  # type: ignore[method-assign]
+    app._retryable = {(1, 0): RetryTurn("old input", "conv-1", "extra")}
+
+    await app.retry(private_message("/retry"))
+
+    app._stream_turn.assert_awaited_once()
+    args, kwargs = app._stream_turn.await_args
+    assert args[2] == "old input"
+    assert kwargs["conversation_id"] == "conv-1"
+    assert kwargs["extra_instructions"] == "extra"
+    assert app._retryable == {}
+
+
+async def test_stream_turn_offers_retry_after_a_failure() -> None:
+    from skye.models import ChatSettings
+
+    class FailingRuntime(AgentRuntime):
+        def __init__(self) -> None:
+            return
+
+        async def run(self, *args: Any, **kwargs: Any) -> RunOutput:
+            raise RuntimeError("boom")
+
+    app = telegram_app()
+    app.sparks = SimpleNamespace(
+        payer=AsyncMock(return_value=1),
+        can_afford=AsyncMock(return_value=True),
+        cost_milli=AsyncMock(return_value=0),
+        charge=AsyncMock(return_value=True),
+    )
+    app.quota = SimpleNamespace(
+        complimentary=AsyncMock(return_value=False),
+        exhausted=AsyncMock(return_value=False),
+        record=AsyncMock(),
+    )
+    app.runtime = FailingRuntime()  # type: ignore[assignment]
+    app.database = SimpleNamespace(
+        get_settings=AsyncMock(return_value=ChatSettings("gpt-5.6-luna", "medium"))
+    )
+    app._can_edit = AsyncMock(return_value=False)  # type: ignore[method-assign]
+    app.groups = SimpleNamespace(mark_seen=AsyncMock())
+
+    sent: list[str] = []
+
+    async def send(
+        target: object,
+        content: object,
+        reply_markup: object = None,
+        reply_to: object = None,
+    ) -> Message:
+        sent.append(str(content))
+        return incoming
+
+    incoming = private_message("hello")
+    app.rich = SimpleNamespace(
+        output=RichMessages.output,
+        send=AsyncMock(side_effect=send),
+        edit=AsyncMock(),
+        delete=AsyncMock(),
+        draft=AsyncMock(),
+        send_images=AsyncMock(),
+        send_documents=AsyncMock(),
+        send_chat=AsyncMock(return_value=incoming),
+    )
+    context = app._context(incoming)
+    assert context is not None
+
+    await app._stream_turn(incoming, context, "hello")
+
+    assert any("/retry" in item for item in sent)
+    pending = app._retryable[(context.chat_id, context.thread_id)]
+    assert pending.user_input == "hello"
+
+
+async def test_admin_askbal_prompts_for_a_user() -> None:
+    app = admin_app()
+    state = AsyncMock()
+    panel = private_message("/admin")
+
+    await app.admin_callback(admin_callback_query("admin:askbal:add", panel), state)
+
+    state.set_state.assert_awaited_once_with(AdminPrompt.target)
+    state.set_data.assert_awaited_once_with({"action": "bal_add", "prompt_message_id": 1})
+    content = app.rich.edit.await_args.args[1]
+    assert content == RichMessages.admin_balance_target_prompt("add")
+    assert button_data(app.rich.edit.await_args.kwargs["reply_markup"]) == ["admin:cancel"]
+
+
+async def test_admin_prompt_balance_accepts_username() -> None:
+    app = admin_app()
+    app.database.find_user_by_username = AsyncMock(return_value=42)
+    state = AsyncMock()
+    state.get_data = AsyncMock(return_value={"action": "bal_add", "prompt_message_id": 1})
+    prompt = private_message("Reply with a numeric Telegram id or an @username.")
+
+    await app.admin_prompt(private_message("@Alice", reply=prompt), state)
+
+    app.database.find_user_by_username.assert_awaited_once_with("Alice")
+    state.set_state.assert_awaited_once_with(AdminPrompt.amount)
+    state.set_data.assert_awaited_once_with(
+        {"action": "add", "user_id": 42, "prompt_message_id": 1}
+    )
+    assert app.rich.edit.await_args.args[0] is prompt
+    assert app.rich.edit.await_args.args[1] == RichMessages.admin_balance_prompt("add", 42)
+
+
+async def test_admin_prompt_balance_rejects_an_unknown_username() -> None:
+    app = admin_app()
+    state = AsyncMock()
+    state.get_data = AsyncMock(return_value={"action": "bal_sub", "prompt_message_id": 1})
+    prompt = private_message("Reply with a numeric Telegram id or an @username.")
+
+    await app.admin_prompt(private_message("@ghost", reply=prompt), state)
+
+    state.set_state.assert_not_awaited()
+    app.rich.send.assert_awaited_once()
+    assert "@ghost" in app.rich.send.await_args.args[1]
+
+
+async def test_resolve_admin_user_reads_ids_and_handles() -> None:
+    app = admin_app()
+    app.database.find_user_by_username = AsyncMock(return_value=7)
+
+    assert await app._resolve_admin_user("42") == 42
+    assert await app._resolve_admin_user("@bob") == 7
+    with pytest.raises(ValueError, match="chat"):
+        await app._resolve_admin_user("-100")
+    with pytest.raises(ValueError, match="numeric"):
+        await app._resolve_admin_user(None)

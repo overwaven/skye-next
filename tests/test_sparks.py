@@ -5,7 +5,7 @@ import pytest
 from skye.db import Database
 from skye.models import RequestContext
 from skye.pricing import SPARK_SCALE, ModelPrice, PricingService, TurnUsage
-from skye.sparks import SparkError, SparkService, format_milli
+from skye.sparks import SparkError, SparkService, format_milli, parse_amount
 
 
 @pytest.fixture
@@ -79,3 +79,33 @@ async def test_cost_milli_uses_pricing(database: Database) -> None:
     )
     usage = TurnUsage(model="x", input_tokens=1_000_000)
     assert wallet.cost_milli(usage) == SPARK_SCALE
+
+
+def test_parse_amount_reads_human_numbers() -> None:
+    assert parse_amount("100") == 100 * SPARK_SCALE
+    assert parse_amount(" 12.5 ") == 12_500
+    assert parse_amount("+3") == 3 * SPARK_SCALE
+    assert parse_amount("1,25") == 1_250
+
+
+@pytest.mark.parametrize("raw", ["", "abc", "0", "-5", "inf", "1e30"])
+def test_parse_amount_rejects_bad_values(raw: str) -> None:
+    with pytest.raises(SparkError):
+        parse_amount(raw)
+
+
+async def test_owner_adjustments_move_the_balance(database: Database, wallet: SparkService) -> None:
+    await wallet.grant(42, 10 * SPARK_SCALE, reason="Added by owner")
+    assert await wallet.balance(42) == 10 * SPARK_SCALE
+
+    assert await wallet.revoke(42, 4 * SPARK_SCALE, reason="Removed by owner")
+    assert await wallet.balance(42) == 6 * SPARK_SCALE
+
+    assert await wallet.reset_balance(42, reason="Reset by owner") == 6 * SPARK_SCALE
+    assert await wallet.balance(42) == 0
+    assert await wallet.reset_balance(42, reason="Reset by owner") == 0
+
+    entries = await wallet.ledger(42)
+    assert [entry.kind for entry in entries] == ["adjust", "adjust", "adjust"]
+    assert entries[0].reason == "Reset by owner"
+

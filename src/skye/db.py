@@ -266,6 +266,16 @@ CREATE TABLE IF NOT EXISTS known_chats (
     updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 
+CREATE TABLE IF NOT EXISTS known_users (
+    user_id INTEGER PRIMARY KEY,
+    username TEXT,
+    display_name TEXT NOT NULL DEFAULT '',
+    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX IF NOT EXISTS known_users_username
+ON known_users(username);
+
 CREATE TABLE IF NOT EXISTS connector_shares (
     id TEXT PRIMARY KEY,
     chat_id INTEGER NOT NULL,
@@ -703,6 +713,30 @@ class Database:
                 (user_id, -milli, kind, reason, reference, provider_cost_rub, detail),
             )
         return True
+
+    async def reset_wallet(self, user_id: int, *, reason: str = "admin") -> int:
+        """Zero a wallet atomically and record the adjustment. Returns the removed amount."""
+
+        async with self.transaction() as connection:
+            cursor = await connection.execute(
+                "SELECT balance_milli FROM wallets WHERE user_id = ?", (user_id,)
+            )
+            row = await cursor.fetchone()
+            balance = int(row["balance_milli"]) if row else 0
+            if balance <= 0:
+                return 0
+            await connection.execute(
+                """UPDATE wallets
+                   SET balance_milli = 0, updated_at = CURRENT_TIMESTAMP
+                   WHERE user_id = ?""",
+                (user_id,),
+            )
+            await connection.execute(
+                """INSERT INTO wallet_ledger (user_id, delta_milli, kind, reason)
+                   VALUES (?, ?, 'adjust', ?)""",
+                (user_id, -balance, reason),
+            )
+        return balance
 
     async def wallet_ledger(self, user_id: int, *, limit: int = 10) -> list[WalletEntry]:
         cursor = await self.conn.execute(
@@ -2068,6 +2102,35 @@ class Database:
                    updated_at = CURRENT_TIMESTAMP""",
             (chat_id, label),
         )
+
+    async def remember_user(
+        self, user_id: int, username: str | None, display_name: str = ""
+    ) -> None:
+        """Keep a light directory of users we have seen, so a handle can find them."""
+
+        handle = username.strip().lstrip("@").lower() if username else None
+        label = " ".join(display_name.split())[:128]
+        await self._write(
+            """INSERT INTO known_users (user_id, username, display_name)
+               VALUES (?, ?, ?)
+               ON CONFLICT(user_id) DO UPDATE SET
+                   username = COALESCE(excluded.username, known_users.username),
+                   display_name = COALESCE(
+                       NULLIF(excluded.display_name, ''), known_users.display_name
+                   ),
+                   updated_at = CURRENT_TIMESTAMP""",
+            (user_id, handle or None, label),
+        )
+
+    async def find_user_by_username(self, username: str) -> int | None:
+        handle = username.strip().lstrip("@").lower()
+        if not handle:
+            return None
+        cursor = await self.conn.execute(
+            "SELECT user_id FROM known_users WHERE username = ?", (handle,)
+        )
+        row = await cursor.fetchone()
+        return int(row["user_id"]) if row else None
 
     async def shareable_groups(self, user_id: int) -> list[KnownGroup]:
         cursor = await self.conn.execute(

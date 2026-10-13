@@ -619,6 +619,23 @@ class RichMessages:
         )
 
     @staticmethod
+    def admin_balance_prompt(action: str, user_id: int) -> InputRichMessage:
+        verb = "add to" if action == "add" else "subtract from"
+        return RichMessages.prompt(
+            "Sparks",
+            f"Reply to this message with the amount of {SPARKS_NAME} to {verb} "
+            f"id {user_id}. Numbers and decimals are fine, for example 100 or 12.5.",
+        )
+
+    @staticmethod
+    def admin_balance_target_prompt(action: str) -> InputRichMessage:
+        verb = "add" if action == "add" else "subtract"
+        return RichMessages.prompt(
+            f"{verb.title()} {SPARKS_NAME}",
+            "Reply with a numeric Telegram id or an @username of the person.",
+        )
+
+    @staticmethod
     def access(
         entries: Sequence[AccessEntry],
         *,
@@ -626,10 +643,13 @@ class RichMessages:
         group_effect: AccessEffect | None = None,
         in_group: bool = False,
         show_entries: bool = True,
+        balance: str | None = None,
     ) -> InputRichMessage:
         blocks: list[InputRichBlockUnion] = [InputRichBlockSectionHeading(text="Access", size=2)]
         if notice:
             blocks.append(InputRichBlockParagraph(text=notice))
+        if balance:
+            blocks.append(InputRichBlockParagraph(text=balance))
         if in_group:
             if group_effect == "allow":
                 status = "This group is allowlisted."
