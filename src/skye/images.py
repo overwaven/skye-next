@@ -12,6 +12,8 @@ from agents import FunctionTool, function_tool
 from openai import APIError, AsyncOpenAI
 
 from .fal import FalClient, FalError
+from .library import MediaLibrary
+from .models import Scope
 
 log = structlog.get_logger()
 MAX_SOURCE_IMAGES = 4
@@ -348,13 +350,20 @@ async def _part_image(part: dict[str, Any], client: AsyncOpenAI) -> bytes | None
 
 @dataclass(slots=True)
 class TurnImages:
-    """Per-turn image budget. Finished pictures are delivered by the runtime."""
+    """Per-turn image budget. Finished pictures are delivered by the runtime.
+
+    ``sources`` holds the current message's pictures. Pictures from earlier
+    messages live in the media library under stable names; the model edits them
+    only by naming them in ``files``, so the wrong picture is never touched.
+    """
 
     service: ImageProvider
     limit: int
     sources: list[tuple[str, bytes]] = field(default_factory=list)
     images: list[bytes] = field(default_factory=list)
     calls: int = 0
+    library: MediaLibrary | None = None
+    scope: Scope | None = None
 
     def tools(self) -> list[FunctionTool]:
         turn = self
@@ -374,35 +383,87 @@ class TurnImages:
             if not prompt.strip():
                 return "Describe the picture first."
             try:
-                turn.images.append(await turn.service.generate(prompt.strip()))
+                image = await turn.service.generate(prompt.strip())
             except Exception as error:
                 log.warning("image_generate_failed", error=type(error).__name__)
                 return "Couldn't create that picture. Try a different description."
+            turn.images.append(image)
             turn.calls += 1
+            turn._store(image)
             return f"Picture {len(turn.images)} of {turn.limit} is ready."
 
         @function_tool
-        async def edit_image(prompt: str) -> str:
-            """Change a photo attached to the current message.
+        async def edit_image(prompt: str, files: list[str] | None = None) -> str:
+            """Change or combine pictures the user shared.
 
-            The finished picture is delivered to the user automatically.
-            Use this only when the user attached a photo or replied to one.
+            Use this for a photo attached to the current message, and for any
+            picture saved earlier in this chat by passing its saved name(s) from
+            list_files. To combine several, name them all. The finished picture
+            is delivered to the user automatically.
 
             Args:
-                prompt: What to change in the attached photo.
+                prompt: What to change, or how to combine the chosen pictures.
+                files: Saved picture names to edit, for example ["image-2.jpg"].
             """
             if turn.calls >= turn.limit:
                 return f"Image limit reached for this turn ({turn.limit})."
-            if not turn.sources:
-                return "No photo is attached to this message. Ask for one first."
             if not prompt.strip():
                 return "Describe the change first."
+            selected, error = turn._select(files)
+            if error is not None:
+                return error
+            if not selected:
+                return turn._no_source_message()
             try:
-                turn.images.append(await turn.service.edit(prompt.strip(), turn.sources))
+                image = await turn.service.edit(prompt.strip(), selected)
             except Exception as error:
                 log.warning("image_edit_failed", error=type(error).__name__)
                 return "Couldn't edit that photo. Try a different change."
+            turn.images.append(image)
             turn.calls += 1
+            turn._store(image)
             return f"Picture {len(turn.images)} of {turn.limit} is ready."
 
         return [generate_image, edit_image]
+
+    def _select(
+        self, names: list[str] | None
+    ) -> tuple[list[tuple[str, bytes]], str | None]:
+        """Resolve which pictures to edit: the attached message, or named files.
+
+        There is no implicit fallback: pictures from earlier messages are only
+        edited when the model names them, so the wrong picture is never touched.
+        """
+        if names:
+            if self.library is None or self.scope is None:
+                return [], "Those pictures are no longer available. Share them again."
+            chosen: list[tuple[str, bytes]] = []
+            for name in names:
+                entry = self.library.entry(self.scope, name)
+                if entry is None or not entry.is_image:
+                    return [], f"No saved picture named {name}."
+                chosen.append((entry.name, self.library.read(self.scope, entry.name)))
+                if len(chosen) >= MAX_SOURCE_IMAGES:
+                    break
+            return chosen, None
+        return self.sources, None
+
+    def _no_source_message(self) -> str:
+        if (
+            self.library is not None
+            and self.scope is not None
+            and self.library.images(self.scope)
+        ):
+            return (
+                "Name the saved picture to edit with files, for example "
+                '["image-1.jpg"], or ask the user to attach it again.'
+            )
+        return "No photo is attached to this message. Ask for one first."
+
+    def _store(self, image: bytes) -> None:
+        if self.library is None or self.scope is None:
+            return
+        try:
+            self.library.save(self.scope, image)
+        except (OSError, ValueError) as error:
+            log.warning("image_store_failed", error=type(error).__name__)

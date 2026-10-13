@@ -95,6 +95,13 @@ class Settings(BaseSettings):
     skye_connector_timeout_seconds: float = Field(default=30.0, ge=5, le=300)
     skye_owner_ids: OwnerIds = Field(min_length=1)
     skye_database_path: Path = Path("data/skye.db")
+    # Shared pictures and files are kept per scope so any later message and any
+    # tool can reuse them. One directory per user or chat, bounded by an idle
+    # TTL and a byte cap.
+    skye_files_dir: Path = Path("data/files")
+    skye_files_ttl_seconds: int = Field(default=30 * 86_400, ge=0)
+    skye_files_scope_bytes: int = Field(default=512 * 1_048_576, ge=1)
+    skye_files_total_bytes: int = Field(default=5 * 1_073_741_824, ge=1)
     skye_base_prompt_path: Path = Path("BASE_PROMPT.md")
     skye_default_model: ModelId = HOSTED_MODEL
     skye_default_reasoning: Reasoning = "medium"

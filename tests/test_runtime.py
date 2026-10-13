@@ -17,6 +17,7 @@ from skye.config import Settings
 from skye.custom_agents import AgentComposition
 from skye.exa import ExaService
 from skye.images import ImageService, TurnImages, sniff_mime, turn_sources
+from skye.library import MediaLibrary
 from skye.memory import MemoryService
 from skye.models import (
     AgentProfile,
@@ -340,6 +341,59 @@ async def test_edit_image_tool_needs_an_attached_photo() -> None:
         _tool_context("edit_image", '{"prompt":"sharpen"}'), '{"prompt":"sharpen"}'
     ) == ("No photo is attached to this message. Ask for one first.")
     images.edit.assert_not_awaited()
+
+
+async def test_edit_image_uses_a_saved_picture_by_name(tmp_path: Any) -> None:
+    from pathlib import Path
+
+    store = MediaLibrary(Path(str(tmp_path)) / "files")
+    scope = Scope("user", 1)
+    source = b"\x89PNG\r\n\x1a\nsource"
+    store.save(scope, source)
+    service = ImageService(cast(Any, AsyncMock()), "img-model", 1024)
+    service.edit = AsyncMock(return_value=b"\x89PNG\r\n\x1a\nout")  # type: ignore[method-assign]
+    turn = TurnImages(service, 2, [], library=store, scope=scope)
+    _generate, edit = turn.tools()
+    payload = '{"prompt":"make it summer","files":["image-1.png"]}'
+
+    result = await edit.on_invoke_tool(_tool_context("edit_image", payload), payload)
+
+    assert result == "Picture 1 of 2 is ready."
+    service.edit.assert_awaited_once_with("make it summer", [("image-1.png", source)])
+    assert [entry.name for entry in store.images(scope)] == ["image-1.png", "image-2.png"]
+
+
+async def test_edit_image_requires_a_name_for_saved_pictures(tmp_path: Any) -> None:
+    from pathlib import Path
+
+    store = MediaLibrary(Path(str(tmp_path)) / "files")
+    scope = Scope("user", 1)
+    first = b"\x89PNG\r\n\x1a\nfirst"
+    second = b"\x89PNG\r\n\x1a\nsecond"
+    store.save(scope, first)
+    store.save(scope, second)
+    service = ImageService(cast(Any, AsyncMock()), "img-model", 1024)
+    service.edit = AsyncMock(return_value=b"\x89PNG\r\n\x1a\nout")  # type: ignore[method-assign]
+    turn = TurnImages(service, 2, [], library=store, scope=scope)
+    _generate, edit = turn.tools()
+
+    unnamed = '{"prompt":"merge them"}'
+    unnamed_result = await edit.on_invoke_tool(_tool_context("edit_image", unnamed), unnamed)
+
+    assert "Name the saved picture" in unnamed_result
+    service.edit.assert_not_awaited()
+
+    missing = '{"prompt":"x","files":["gone.png"]}'
+    assert await edit.on_invoke_tool(_tool_context("edit_image", missing), missing) == (
+        "No saved picture named gone.png."
+    )
+
+    named = '{"prompt":"merge them","files":["image-1.png","image-2.png"]}'
+    await edit.on_invoke_tool(_tool_context("edit_image", named), named)
+
+    service.edit.assert_awaited_once_with(
+        "merge them", [("image-1.png", first), ("image-2.png", second)]
+    )
 
 
 def test_sniff_mime_detects_common_formats() -> None:
@@ -1140,6 +1194,92 @@ async def test_run_delivers_new_workspace_files(tmp_path: object) -> None:
 
     assert [item.filename for item in output.files] == ["report.txt"]
     assert output.files[0].data == b"report"
+
+
+async def test_run_saves_uploads_and_exposes_them_to_the_agent(tmp_path: object) -> None:
+    from pathlib import Path
+
+    runtime = runtime_for_run()
+    runtime.files = MediaLibrary(Path(str(tmp_path)) / "files")
+    encoded = base64.b64encode(b"\x89PNG\r\n\x1a\nhead").decode()
+    user_input: list[Any] = [
+        {
+            "role": "user",
+            "content": [
+                {"type": "input_text", "text": "what do you make of this?"},
+                {"type": "input_image", "image_url": f"data:image/png;base64,{encoded}"},
+            ],
+        }
+    ]
+    seen: dict[str, Any] = {}
+
+    def run_streamed(agent: Any, *_args: Any, **_kwargs: Any) -> FakeStream:
+        seen["agent"] = agent
+        return FakeStream(output="ok")
+
+    with patch("skye.runtime.Runner.run_streamed", side_effect=run_streamed):
+        await runtime.run(
+            RequestContext(1, "private", 1),
+            ChatSettings("gpt-5.6-luna", "medium", memory_enabled=False),
+            user_input,
+            AsyncMock(),
+        )
+
+    assert [entry.name for entry in runtime.files.images(Scope("user", 1))] == ["image-1.png"]
+    agent = seen["agent"]
+    assert agent is not None
+    assert "list_files" in {getattr(tool, "name", None) for tool in agent.tools}
+    assert "image-1.png" in cast(str, agent.instructions)
+
+
+async def test_run_seeds_saved_files_into_the_sandbox(tmp_path: object) -> None:
+    from pathlib import Path
+
+    work = Path(str(tmp_path)) / "work"
+    sandbox = SandboxService(
+        "python:3.14-slim", 10, 1024, volume="test-sandbox-work", work_dir=work
+    )
+    runtime = runtime_for_run(sandbox=sandbox)
+    runtime.files = MediaLibrary(Path(str(tmp_path)) / "files")
+    runtime.files.save(Scope("user", 1), b"\x89PNG\r\n\x1a\nhead")
+
+    with patch("skye.runtime.Runner.run_streamed", return_value=FakeStream(output="ok")):
+        await runtime.run(
+            RequestContext(1, "private", 1),
+            ChatSettings("gpt-5.6-luna", "medium", memory_enabled=False),
+            "hello",
+            AsyncMock(),
+        )
+
+    workspace = sandbox.workspace_path(Scope("user", 1))
+    assert (workspace / "image-1.png").read_bytes() == b"\x89PNG\r\n\x1a\nhead"
+
+
+async def test_run_backfills_saved_media_from_earlier_history(tmp_path: object) -> None:
+    from pathlib import Path
+
+    runtime = runtime_for_run()
+    runtime.files = MediaLibrary(Path(str(tmp_path)) / "files")
+    encoded = base64.b64encode(b"\x89PNG\r\n\x1a\nold").decode()
+    runtime.conversations.database.session_items.return_value = [
+        {
+            "role": "user",
+            "content": [
+                {"type": "input_text", "text": "look at this"},
+                {"type": "input_image", "image_url": f"data:image/png;base64,{encoded}"},
+            ],
+        }
+    ]
+
+    with patch("skye.runtime.Runner.run_streamed", return_value=FakeStream(output="ok")):
+        await runtime.run(
+            RequestContext(1, "private", 1),
+            ChatSettings("gpt-5.6-luna", "medium", memory_enabled=False),
+            "what did you think of it?",
+            AsyncMock(),
+        )
+
+    assert runtime.files.read(Scope("user", 1), "image-1.png") == b"\x89PNG\r\n\x1a\nold"
 
 
 async def test_run_recovers_delivered_turn_when_followup_fails_transiently() -> None:

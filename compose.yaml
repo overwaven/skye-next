@@ -10,6 +10,8 @@ services:
       - .env
     environment:
       SKYE_DATABASE_PATH: /data/skye.db
+      # Shared pictures and files live beside the database so they survive restarts.
+      SKYE_FILES_DIR: /data/files
     volumes:
       - skye-data:/data
       # Sandbox control: the bot spawns one Docker container per shell_exec

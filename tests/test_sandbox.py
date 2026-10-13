@@ -70,6 +70,18 @@ def test_seed_does_not_overwrite_existing_files(tmp_path: Path) -> None:
     assert (box.workspace / "report-2.txt").read_bytes() == b"attachment"
 
 
+def test_seed_if_absent_keeps_stable_names_and_skips_existing(tmp_path: Path) -> None:
+    box = service(tmp_path).new_workspace(Scope("user", 7))
+
+    box.seed_if_absent([("image-1.png", b"first"), ("notes.txt", b"notes")])
+    box.seed_if_absent([("image-1.png", b"changed"), ("image-2.png", b"second")])
+
+    assert (box.workspace / "image-1.png").read_bytes() == b"first"
+    assert (box.workspace / "image-2.png").read_bytes() == b"second"
+    assert (box.workspace / "notes.txt").read_bytes() == b"notes"
+    assert not (box.workspace / "image-1-2.png").exists()
+
+
 def test_changes_detect_new_and_modified_files(tmp_path: Path) -> None:
     sandbox = service(tmp_path)
     scope = Scope("user", 7)

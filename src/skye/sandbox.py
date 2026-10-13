@@ -377,6 +377,21 @@ class ScopeSandbox:
             except ValueError as error:
                 log.warning("sandbox_seed_rejected", name=unique, error=str(error))
 
+    def seed_if_absent(self, files: list[tuple[str, bytes]]) -> None:
+        """Write library files under their stored names, skipping any that exist.
+
+        Unlike :meth:`seed`, this never renames: the name the model sees in
+        ``list_files`` is the name it can open at ``/work``.
+        """
+        for name, data in files:
+            safe = _safe_name(name)
+            if safe is None or (self.workspace / safe).exists():
+                continue
+            try:
+                self.service.write_bytes(self.scope, safe, data)
+            except ValueError as error:
+                log.warning("sandbox_seed_rejected", name=safe, error=str(error))
+
     def _unique_name(self, name: str) -> str:
         target = PurePosixPath(name)
         stem, suffix = target.stem, target.suffix

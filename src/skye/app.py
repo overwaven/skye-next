@@ -36,6 +36,7 @@ from .exa import ExaService
 from .fal import FalClient
 from .group_context import GroupContextService
 from .images import FalImageService, ImageProvider, ImageService
+from .library import MediaLibrary
 from .media_groups import MediaGroupService
 from .memory import MemoryService
 from .model_traffic import ModelCallTransport
@@ -240,6 +241,12 @@ async def run() -> None:
         if config.skye_sandbox_enabled
         else None
     )
+    files = MediaLibrary(
+        config.skye_files_dir,
+        ttl_seconds=config.skye_files_ttl_seconds,
+        scope_bytes=config.skye_files_scope_bytes,
+        total_bytes=config.skye_files_total_bytes,
+    )
     runtime = AgentRuntime(
         config,
         conversations,
@@ -254,6 +261,7 @@ async def run() -> None:
         exa,
         sandbox,
         audio=audio,
+        files=files,
     )
     telegram_projects = TelegramProjectService(database)
     telegram = TelegramApp(
@@ -299,6 +307,7 @@ async def run() -> None:
         janitor = (
             asyncio.create_task(sandbox.run_janitor()) if sandbox is not None else None
         )
+        files_janitor = asyncio.create_task(files.run_janitor())
         stop = asyncio.Event()
         loop = asyncio.get_running_loop()
         for sig in (signal.SIGINT, signal.SIGTERM):
@@ -320,6 +329,7 @@ async def run() -> None:
             scheduler.cancel()
             if janitor is not None:
                 janitor.cancel()
+            files_janitor.cancel()
             with contextlib.suppress(asyncio.CancelledError):
                 await polling
             with contextlib.suppress(asyncio.CancelledError):
@@ -327,6 +337,8 @@ async def run() -> None:
             if janitor is not None:
                 with contextlib.suppress(asyncio.CancelledError):
                     await janitor
+            with contextlib.suppress(asyncio.CancelledError):
+                await files_janitor
     finally:
         await connectors.aclose()
         await client.close()

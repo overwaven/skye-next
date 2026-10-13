@@ -57,8 +57,16 @@ from .conversations import ConversationService
 from .custom_agents import AGENT_CAPABILITIES, AgentComposition, CustomAgentService
 from .exa import ExaService
 from .images import ImageProvider, TurnImages, turn_sources
+from .library import MediaLibrary
 from .memory import MemoryService
-from .models import AgentCapability, ChatSettings, InstalledAgent, RequestContext, Skill
+from .models import (
+    AgentCapability,
+    ChatSettings,
+    InstalledAgent,
+    RequestContext,
+    Scope,
+    Skill,
+)
 from .pricing import TurnUsage
 from .sandbox import SandboxService, ScopeSandbox, turn_files
 from .sessions import DatabaseSession, without_inline_payloads
@@ -686,6 +694,7 @@ class AgentRuntime:
         exa: ExaService | None = None,
         sandbox: SandboxService | None = None,
         audio: AudioService | None = None,
+        files: MediaLibrary | None = None,
     ) -> None:
         self.config = config
         self.conversations = conversations
@@ -699,6 +708,7 @@ class AgentRuntime:
         self.images = images
         self.exa = exa
         self.sandbox = sandbox
+        self.files = files
         self.base_prompt = base_prompt.strip()
         self._locks: defaultdict[str, asyncio.Lock] = defaultdict(asyncio.Lock)
         self._run_slots = asyncio.BoundedSemaphore(config.skye_max_concurrent_runs)
@@ -789,6 +799,20 @@ class AgentRuntime:
                 skills: tuple[Skill, ...] = ()
                 if self.skills is not None:
                     skills = await self.skills.mounted(context.scope)
+                uploads: list[tuple[str, bytes]] = []
+                if self.files is not None or self.sandbox is not None:
+                    uploads = await turn_files(
+                        user_input,
+                        self.client,
+                        self.config.skye_max_attachment_bytes,
+                    )
+                if self.files is not None:
+                    await self._backfill_library(session_id, context.scope)
+                    for name, data in uploads:
+                        try:
+                            self.files.save(context.scope, data, name=name)
+                        except (OSError, ValueError) as error:
+                            log.warning("library_save_failed", error=type(error).__name__)
                 turn_images: TurnImages | None = None
                 if self.images is not None:
                     sources: list[tuple[str, bytes]] = []
@@ -802,16 +826,17 @@ class AgentRuntime:
                         self.images,
                         requested_image_limit(user_input),
                         sources,
+                        library=self.files,
+                        scope=context.scope,
                     )
                 if self.sandbox is not None:
                     turn_sandbox = self.sandbox.new_workspace(context.scope)
-                    turn_sandbox.seed(
-                        await turn_files(
-                            user_input,
-                            self.client,
-                            self.config.skye_max_attachment_bytes,
-                        )
-                    )
+                    if self.files is not None:
+                        # The library already holds this turn's uploads under
+                        # their stable names, so seed from it rather than again.
+                        self._seed_library(turn_sandbox)
+                    else:
+                        turn_sandbox.seed(uploads)
                     turn_sandbox.mark()
                 agent = self._agent(
                     context,
@@ -826,6 +851,7 @@ class AgentRuntime:
                     image_tool_calls=image_tool_call_limit(user_input),
                     turn_images=turn_images,
                     turn_sandbox=turn_sandbox,
+                    files=self.files,
                     connector_tools=connector_tools,
                     connector_labels=connector_labels,
                 )
@@ -1194,6 +1220,46 @@ class AgentRuntime:
             return
         raise asyncio.CancelledError
 
+    async def _backfill_library(self, session_id: str, scope: Scope) -> None:
+        """Import pictures and files from earlier messages, once per scope.
+
+        A conversation that predates the media library still holds its uploads
+        in the session history. The first turn after the upgrade finds the
+        scope's library empty, so the history is imported once and kept.
+        """
+        if self.files is None or self.files.entries(scope):
+            return
+        try:
+            history = await self.conversations.database.session_items(session_id)
+        except Exception as error:  # noqa: BLE001 - backfill must never break a run
+            log.warning("library_backfill_failed", error=type(error).__name__)
+            return
+        if not history:
+            return
+        found = await turn_files(history, self.client, self.config.skye_max_attachment_bytes)
+        for name, data in found:
+            try:
+                self.files.save(scope, data, name=name)
+            except (OSError, ValueError) as error:
+                log.warning("library_backfill_skipped", error=type(error).__name__)
+
+    def _seed_library(self, sandbox: ScopeSandbox) -> None:
+        """Copy saved pictures and files into the workspace once, keeping names.
+
+        This is what lets shell_exec, python and read_file work on anything the
+        user shared in an earlier message, at the same path ``list_files`` shows.
+        """
+        if self.files is None:
+            return
+        for entry in self.files.recent(sandbox.scope):
+            if (sandbox.workspace / entry.name).exists():
+                continue
+            try:
+                data = self.files.read(sandbox.scope, entry.name)
+            except (OSError, ValueError):
+                continue
+            sandbox.seed_if_absent([(entry.name, data)])
+
     def _agent(
         self,
         context: RequestContext,
@@ -1208,6 +1274,7 @@ class AgentRuntime:
         image_tool_calls: int | None = None,
         turn_images: TurnImages | None = None,
         turn_sandbox: ScopeSandbox | None = None,
+        files: MediaLibrary | None = None,
         connector_tools: tuple[Tool, ...] = (),
         connector_labels: tuple[str, ...] = (),
     ) -> Agent[None]:
@@ -1227,6 +1294,7 @@ class AgentRuntime:
             include_automations=manage_automations,
             awaiting_reply=awaiting_reply,
             include_send_message=True,
+            library_note=files.describe(context.scope) if files is not None else "",
         )
         tools: list[Tool] = []
         tools.append(delivery.tool())
@@ -1236,6 +1304,8 @@ class AgentRuntime:
             tools.append(delivery.file_tool())
         if turn_images is not None and "image" in capabilities:
             tools.extend(turn_images.tools())
+        if files is not None:
+            tools.append(files.tool(context.scope))
         if self.exa is not None and "web" in capabilities:
             tools.extend(self.exa.tools())
         if skills:
@@ -1255,6 +1325,7 @@ class AgentRuntime:
                 image_tool_calls=image_tool_calls,
                 turn_images=turn_images,
                 turn_sandbox=turn_sandbox,
+                files=files,
                 connector_tools=connector_tools,
             ).as_tool(
                 tool_name=f"agent_{item.profile.id}",
@@ -1292,6 +1363,7 @@ class AgentRuntime:
         include_automations: bool = False,
         awaiting_reply: bool = True,
         include_send_message: bool = True,
+        library_note: str = "",
     ) -> str:
         instructions = active.version.instructions if active else self.base_prompt
         capabilities = (
@@ -1326,21 +1398,35 @@ class AgentRuntime:
             )
         if "image" in capabilities:
             instructions += (
-                "\n\nCall generate_image for new pictures and edit_image to change a photo "
-                "attached to the current message. Finished pictures are delivered to the "
-                "user automatically. For a singular request, make exactly one call. "
-                "Only make more calls when the user explicitly asks for a number of images. "
-                "A completed image is delivery; never generate another variant afterward."
+                "\n\nCall generate_image for new pictures and edit_image to change or "
+                "combine pictures. edit_image can use a photo attached to the current "
+                "message; pictures shared earlier in this chat must be named in files "
+                "(see list_files), and to combine several, name them all. Finished "
+                "pictures are delivered to the user automatically. For a singular request, "
+                "make exactly one call. Only make more calls when the user explicitly asks "
+                "for a number of images. A completed image is delivery; never generate "
+                "another variant afterward. Never claim you saved or sent a file unless a "
+                "tool returned success."
+            )
+        can_use_saved = "image" in capabilities or (
+            "shell" in capabilities and self.sandbox is not None
+        )
+        if library_note and can_use_saved:
+            instructions += (
+                f"\n\nPictures and files saved earlier in this chat: {library_note}. "
+                "Name them with edit_image to change or combine them, and open them by "
+                "name in the workspace; call list_files to see them again."
             )
         if "shell" in capabilities and self.sandbox is not None:
             instructions += (
                 "\n\nYou have a persistent Linux workspace, mounted at /work and kept "
                 "between messages. Use shell_exec for commands, python for Python code, "
                 "read_file to read a text file, and write_file to save text. Files "
-                "attached to the current message are placed there under their original "
-                "names. New and changed files are sent to the user automatically at the "
-                "end of the turn; call deliver_file only for a file you want sent even "
-                "if it did not change. Never paste base64 into a message."
+                "attached to the current message, and pictures and files shared earlier, "
+                "are placed there under the names list_files shows. New and changed files "
+                "are sent to the user automatically at the end of the turn; call "
+                "deliver_file only for a file you want sent even if it did not change. "
+                "Never paste base64 into a message."
             )
             if self.sandbox.allow_network:
                 instructions += " The sandbox can reach the public internet."
@@ -1407,6 +1493,7 @@ class AgentRuntime:
         image_tool_calls: int | None = None,
         turn_images: TurnImages | None = None,
         turn_sandbox: ScopeSandbox | None = None,
+        files: MediaLibrary | None = None,
         connector_tools: tuple[Tool, ...] = (),
     ) -> Agent[None]:
         instructions = self._instructions(
@@ -1416,12 +1503,15 @@ class AgentRuntime:
             installed,
             skills=skills,
             include_send_message=False,
+            library_note=files.describe(context.scope) if files is not None else "",
         )
         tools: list[Tool] = []
         if "shell" in installed.version.capabilities and turn_sandbox is not None:
             tools.extend(turn_sandbox.tools())
         if turn_images is not None and "image" in installed.version.capabilities:
             tools.extend(turn_images.tools())
+        if files is not None:
+            tools.append(files.tool(context.scope))
         if self.exa is not None and "web" in installed.version.capabilities:
             tools.extend(self.exa.tools())
         tools.extend(connector_tools)
