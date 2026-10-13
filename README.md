@@ -2,7 +2,7 @@
 
 # Meet `Skye`
 
-- [Website](skye-bot.com)
+- [Website](https://skye-bot.com)
 - [Docs](https://docs.skye-bot.com)
 
 ## Features
