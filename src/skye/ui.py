@@ -246,6 +246,8 @@ def _button_icon(
             return Icon.DELETE
         if callback == "acct:home":
             return Icon.HEART
+        if callback.startswith("acct:pack"):
+            return Icon.SPARKLES
         return Icon.GIFT
     if callback.startswith("admin:"):
         if ":allow" in callback or callback == "admin:allow_group":

@@ -51,7 +51,7 @@ class SparkPackage:
     @property
     def button_label(self) -> str:
         bonus = f"  +{self.bonus_percent}%" if self.bonus_percent else ""
-        return f"{self.sparks} {SPARKS_SYMBOL} · {self.stars} ⭐{bonus}"
+        return f"{self.sparks} · {self.stars} ⭐{bonus}"
 
     @property
     def invoice_title(self) -> str:

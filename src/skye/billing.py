@@ -28,15 +28,13 @@ from .access import AccessService
 from .db import Database
 from .models import RequestContext, WalletEntry
 from .quota import QuotaService
-from .rich import RichMessages
+from .rich import RichMessages, sparks_amount, sparks_mark
 from .sparks import (
     PACKAGES,
     SPARKS_NAME,
-    SPARKS_SYMBOL,
     STARS_CURRENCY,
     SparkPackage,
     SparkService,
-    format_amount,
     package_by_id,
 )
 
@@ -270,8 +268,16 @@ class AccountPanel:
         await self.rich.send(
             message,
             self.rich.prompt(
-                f"{SPARKS_SYMBOL} {SPARKS_NAME}",
-                f"Added {package.sparks} {SPARKS_SYMBOL}. Balance: {format_amount(balance)}.",
+                [sparks_mark(), f" {SPARKS_NAME}"],
+                [
+                    "Added ",
+                    str(package.sparks),
+                    " ",
+                    sparks_mark(),
+                    ". Balance: ",
+                    *sparks_amount(balance),
+                    ".",
+                ],
             ),
         )
 

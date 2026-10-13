@@ -118,3 +118,18 @@ def test_back_uses_only_the_custom_icon() -> None:
         ("Back", Icon.BACK),
         ("Prev", Icon.BACK),
     ]
+
+
+def test_account_package_buttons_use_the_sparks_icon() -> None:
+    from skye.billing import AccountPanel
+    from skye.sparks import PACKAGES
+
+    decorated = decorate_keyboard(AccountPanel._private_keyboard(show_spend=True))
+    by_data = {
+        button.callback_data: button.icon_custom_emoji_id
+        for row in decorated.inline_keyboard
+        for button in row
+    }
+
+    for package in PACKAGES.values():
+        assert by_data[f"acct:pack:{package.id}"] == Icon.SPARKLES

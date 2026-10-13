@@ -64,7 +64,7 @@ from .models import (
     ScopeKind,
 )
 from .quota import QuotaService
-from .rich import RichMessages, format_tokens
+from .rich import RichMessages, format_tokens, sparks_amount, sparks_mark
 from .runtime import (
     AgentRuntime,
     ContextLimitError,
@@ -77,10 +77,8 @@ from .runtime import (
 from .skills import SkillError, SkillPanel, SkillService, SkillWizard
 from .sparks import (
     SPARKS_NAME,
-    SPARKS_SYMBOL,
     SparkError,
     SparkService,
-    format_amount,
     format_milli,
     parse_amount,
 )
@@ -1248,9 +1246,14 @@ class TelegramApp:
         if action == "reset":
             removed = await self.sparks.reset_balance(user_id, reason="Reset by owner")
             balance = await self.sparks.balance(user_id)
-            notice = (
-                f"Reset. Removed {format_amount(removed)}. "
-                f"Balance: {format_amount(balance)}."
+            notice: RichTextUnion = (
+                [
+                    "Reset. Removed ",
+                    *sparks_amount(removed),
+                    ". Balance: ",
+                    *sparks_amount(balance),
+                    ".",
+                ]
                 if removed
                 else "The balance is already empty."
             )
@@ -1303,12 +1306,18 @@ class TelegramApp:
 
     async def _apply_balance(
         self, actor_id: int, action: BalanceAction, user_id: int, milli: int
-    ) -> str:
+    ) -> RichTextUnion:
         if action == "add":
             balance = await self.sparks.grant(
                 user_id, milli, reason="Added by owner", reference=f"admin:{actor_id}"
             )
-            return f"Added {format_amount(milli)}. Balance: {format_amount(balance)}."
+            return [
+                "Added ",
+                *sparks_amount(milli),
+                ". Balance: ",
+                *sparks_amount(balance),
+                ".",
+            ]
         if action == "sub":
             current = await self.sparks.balance(user_id)
             removed = min(milli, current)
@@ -1318,11 +1327,14 @@ class TelegramApp:
                 user_id, removed, reason="Removed by owner", reference=f"admin:{actor_id}"
             ):
                 balance = await self.sparks.balance(user_id)
-                return f"The balance is only {format_amount(balance)}. Nothing removed."
-            return (
-                f"Removed {format_amount(removed)}. "
-                f"Balance: {format_amount(current - removed)}."
-            )
+                return ["The balance is only ", *sparks_amount(balance), ". Nothing removed."]
+            return [
+                "Removed ",
+                *sparks_amount(removed),
+                ". Balance: ",
+                *sparks_amount(current - removed),
+                ".",
+            ]
         raise ValueError("Unknown admin action.")
 
     async def _show_admin(
@@ -1345,11 +1357,11 @@ class TelegramApp:
             )
         visible = () if in_group else entries
         reply_balance: int | None = None
-        balance_line: str | None = None
+        balance_line: RichTextUnion | None = None
         if reply_user is not None:
             name = (reply_user.first_name or "user")[:20]
             reply_balance = await self.sparks.balance(reply_user.id)
-            balance_line = f"{name}: {format_amount(reply_balance)}."
+            balance_line = [f"{name}: ", *sparks_amount(reply_balance), "."]
         content = RichMessages.access(
             visible,
             notice=notice,
@@ -1656,8 +1668,13 @@ class TelegramApp:
                     if await self.growth.completed_task(context.user_id, capability):
                         await self.rich.send(
                             message,
-                            f"You have found a few ways I can help. Here is a "
-                            f"{format_milli(ACTIVATION_BONUS)} {SPARKS_SYMBOL} bonus.",
+                            self.rich.plain(
+                                [
+                                    "You have found a few ways I can help. Here is a ",
+                                    *sparks_amount(ACTIVATION_BONUS),
+                                    " bonus.",
+                                ]
+                            ),
                         )
         except TimeoutError:
             if sent_holder["count"] == 0:
@@ -2007,7 +2024,7 @@ class TelegramApp:
         current = await self.database.get_settings(context.scope)
         if not current.sparks_display:
             return
-        await self.rich.send(message, self._spend_line(cost, usage))
+        await self.rich.send(message, self.rich.plain(self._spend_line(cost, usage)))
 
     async def _show_free_spend(
         self, context: RequestContext, message: Message | None, payer_id: int
@@ -2029,15 +2046,15 @@ class TelegramApp:
         )
 
     @staticmethod
-    def _spend_line(cost: int, usage: object) -> str:
-        parts = [f"{SPARKS_SYMBOL} {format_milli(cost)}"]
+    def _spend_line(cost: int, usage: object) -> list[RichTextUnion]:
+        parts: list[RichTextUnion] = [sparks_mark(), f" {format_milli(cost)}"]
         total = getattr(usage, "total_tokens", 0)
         images = getattr(usage, "images", 0)
         if total:
-            parts.append(f"{total / 1000:.1f}k tokens")
+            parts.extend([" · ", f"{total / 1000:.1f}k tokens"])
         if images:
-            parts.append(f"{images} image" + ("s" if images != 1 else ""))
-        return " · ".join(parts)
+            parts.extend([" · ", f"{images} image" + ("s" if images != 1 else "")])
+        return parts
 
     async def _deny_access(self, message: Message, context: RequestContext) -> None:
         if context.chat_type == "private":

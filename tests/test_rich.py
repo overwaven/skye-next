@@ -15,6 +15,7 @@ from aiogram.types import (
     ReplyParameters,
     RichTextBold,
     RichTextCode,
+    RichTextCustomEmoji,
     RichTextUrl,
     User,
 )
@@ -31,7 +32,8 @@ from skye.models import (
     Skill,
 )
 from skye.quota import Allowance
-from skye.rich import RichMessages
+from skye.rich import RichMessages, sparks_amount, sparks_mark
+from skye.ui import Icon
 
 
 def test_output_keeps_markdown_without_media() -> None:
@@ -505,6 +507,31 @@ def test_sparks_account_shows_balance_and_spend_state() -> None:
     joined = " ".join(str(text) for text in texts)
     assert "3.5" in joined
     assert "Spend display: On" in joined
+
+
+def test_sparks_amount_uses_the_icon_custom_emoji() -> None:
+    mark = sparks_mark()
+    assert isinstance(mark, RichTextCustomEmoji)
+    assert mark.custom_emoji_id == Icon.SPARKLES
+    assert mark.alternative_text == "✦"
+
+    assert sparks_amount(12_500) == ["12.5", " ", mark]
+
+
+def test_sparks_account_balance_carries_the_custom_emoji() -> None:
+    message = RichMessages.sparks_account(
+        balance=3500,
+        entries=[],
+        show_spend=True,
+        owner=False,
+    )
+    paragraph = message.blocks[2]
+    assert isinstance(paragraph, InputRichBlockParagraph)
+    assert isinstance(paragraph.text, list)
+    assert any(
+        isinstance(part, RichTextCustomEmoji) and part.custom_emoji_id == Icon.SPARKLES
+        for part in paragraph.text
+    )
 
 
 def test_sparks_account_shows_the_free_allowance() -> None:

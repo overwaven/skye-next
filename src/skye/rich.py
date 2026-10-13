@@ -22,6 +22,7 @@ from aiogram.types import (
     RichBlockTableCell,
     RichTextBold,
     RichTextCode,
+    RichTextCustomEmoji,
     RichTextUnion,
     RichTextUrl,
 )
@@ -47,14 +48,30 @@ from .models import (
     WalletEntry,
 )
 from .quota import Allowance
-from .sparks import SPARKS_NAME, SPARKS_SYMBOL, format_amount
+from .sparks import SPARKS_NAME, SPARKS_SYMBOL, format_milli
 from .telegram_threads import api_thread_id, quote_reply, reply_parameters
-from .ui import activity_message, decorate_keyboard
+from .ui import Icon, activity_message, decorate_keyboard
 
 
 def _voice_filename(audio: bytes) -> str:
     mp3_headers = (b"ID3", b"\xff\xfb", b"\xff\xf3", b"\xff\xf2")
     return "voice.mp3" if audio.startswith(mp3_headers) else "voice.ogg"
+
+
+def sparks_mark() -> RichTextCustomEmoji:
+    """The Sparks glyph as a custom emoji, with ``✦`` as the fallback text."""
+
+    return RichTextCustomEmoji(
+        custom_emoji_id=Icon.SPARKLES,
+        alternative_text=SPARKS_SYMBOL,
+    )
+
+
+def sparks_amount(milli: int) -> list[RichTextUnion]:
+    """A Sparks amount such as ``12.5 ✦`` as rich text with the custom emoji."""
+
+    return [format_milli(milli), " ", sparks_mark()]
+
 
 
 def format_tokens(value: int) -> str:
@@ -292,7 +309,7 @@ class RichMessages:
         complimentary: bool = False,
         allowance: Allowance | None = None,
     ) -> InputRichMessage:
-        def cell(text: str, *, header: bool = False) -> RichBlockTableCell:
+        def cell(text: RichTextUnion, *, header: bool = False) -> RichBlockTableCell:
             return RichBlockTableCell(
                 text=text, is_header=header or None, align="left", valign="middle"
             )
@@ -310,7 +327,9 @@ class RichMessages:
                 InputRichBlockParagraph(text=f"Free access. {SPARKS_NAME} are not charged.")
             )
         else:
-            blocks.append(InputRichBlockParagraph(text=f"Balance: {format_amount(balance)}"))
+            blocks.append(
+                InputRichBlockParagraph(text=["Balance: ", *sparks_amount(balance)])
+            )
         if allowance is not None:
             blocks.append(InputRichBlockSectionHeading(text="Free allowance", size=3))
             rows = [
@@ -340,7 +359,7 @@ class RichMessages:
         if entries:
             rows = [[cell("Change", header=True), cell("What", header=True)]]
             for entry, label in entries:
-                rows.append([cell(format_amount(entry.delta_milli)), cell(label)])
+                rows.append([cell(sparks_amount(entry.delta_milli)), cell(label)])
             blocks.append(InputRichBlockTable(cells=rows, is_bordered=True, is_striped=True))
         blocks.append(
             InputRichBlockParagraph(text=f"Spend display: {'On' if show_spend else 'Off'}.")
@@ -362,11 +381,11 @@ class RichMessages:
         if notice:
             blocks.append(InputRichBlockParagraph(text=notice))
         if owner:
-            paragraph = f"Owner access. {SPARKS_NAME} are not charged."
+            paragraph: RichTextUnion = f"Owner access. {SPARKS_NAME} are not charged."
         elif complimentary:
             paragraph = f"Free access. {SPARKS_NAME} are not charged."
         else:
-            paragraph = f"Your balance: {format_amount(balance)}"
+            paragraph = ["Your balance: ", *sparks_amount(balance)]
         blocks.append(InputRichBlockParagraph(text=paragraph))
         if allowance is not None:
             blocks.append(
@@ -392,7 +411,7 @@ class RichMessages:
         return InputRichMessage(
             blocks=[
                 InputRichBlockSectionHeading(
-                    text=f"{SPARKS_SYMBOL} {sparks} {SPARKS_NAME}", size=2
+                    text=[sparks_mark(), f" {sparks} {SPARKS_NAME}"], size=2
                 ),
                 InputRichBlockParagraph(text=price),
                 InputRichBlockParagraph(
@@ -638,13 +657,19 @@ class RichMessages:
         )
 
     @staticmethod
-    def prompt(title: str, body: RichTextUnion) -> InputRichMessage:
+    def prompt(title: RichTextUnion, body: RichTextUnion) -> InputRichMessage:
         return InputRichMessage(
             blocks=[
                 InputRichBlockSectionHeading(text=title, size=2),
                 InputRichBlockParagraph(text=body),
             ]
         )
+
+    @staticmethod
+    def plain(text: RichTextUnion) -> InputRichMessage:
+        """A single paragraph, for short status lines that need rich text."""
+
+        return InputRichMessage(blocks=[InputRichBlockParagraph(text=text)])
 
     @staticmethod
     def access_target(target: Scope) -> list[RichTextUnion]:
@@ -693,7 +718,7 @@ class RichMessages:
         group_effect: AccessEffect | None = None,
         in_group: bool = False,
         show_entries: bool = True,
-        balance: str | None = None,
+        balance: RichTextUnion | None = None,
     ) -> InputRichMessage:
         blocks: list[InputRichBlockUnion] = [InputRichBlockSectionHeading(text="Access", size=2)]
         if notice:
