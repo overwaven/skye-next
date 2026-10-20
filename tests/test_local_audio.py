@@ -33,6 +33,13 @@ def wav_bytes() -> bytes:
     return output.getvalue()
 
 
+def test_local_audio_does_not_fall_back_to_fal() -> None:
+    config = settings(skye_audio_provider="local", skye_fal_key="fal-key")
+
+    assert config.audio_on_local is True
+    assert config.audio_on_fal is False
+
+
 def test_from_settings_selects_the_local_models() -> None:
     local = cast(Any, SimpleNamespace())
     service = AudioService.from_settings(
