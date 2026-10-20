@@ -86,6 +86,8 @@ Everything else is optional and turns a capability on:
 | `SKYE_TOOL_STRICT=false` | A provider that rejects strict tool schemas (for example Beget) |
 | `SKYE_WEB_ORIGIN` | Public origin for webhook automation URLs |
 
+Speech can also stay on the machine: `SKYE_AUDIO_PROVIDER=local` transcribes voice notes with Whisper large-v3-turbo (the faster-whisper CTranslate2 build of `openai/whisper-large-v3-turbo`) and speaks replies with Supertonic 3 on ONNX Runtime, both on the CPU. The models download once, about 2 GB, into `SKYE_MODELS_DIR`; `SKYE_LOCAL_SPEECH_VOICE` picks `F1`–`F5` or `M1`–`M5`.
+
 The database and every picture and file a user sends live on the `skye-data` volume. There is no inbound port — she uses long polling. Logs are structured JSON on stdout, so `docker compose logs -f` is enough, or start the Dozzle viewer for SQL over the event fields:
 
 ```bash
