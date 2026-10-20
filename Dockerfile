@@ -8,6 +8,7 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     UV_COMPILE_BYTECODE=1 \
     UV_LINK_MODE=copy \
+    HF_HOME=/data/huggingface \
     PATH="/app/.venv/bin:$PATH"
 
 COPY --from=uv /uv /uvx /bin/
