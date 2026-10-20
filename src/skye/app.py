@@ -37,6 +37,7 @@ from .fal import FalClient
 from .group_context import GroupContextService
 from .images import FalImageService, ImageProvider, ImageService
 from .library import MediaLibrary
+from .local_audio import LocalAudio
 from .media_groups import MediaGroupService
 from .memory import MemoryService
 from .model_traffic import ModelCallTransport
@@ -167,6 +168,8 @@ async def run() -> None:
     audio: AudioService
     if config.audio_on_fal:
         audio = AudioService.from_settings(config, fal=fal())
+    elif config.audio_on_local:
+        audio = AudioService.from_settings(config, local=LocalAudio(config))
     else:
         audio_client = (
             AsyncOpenAI(
@@ -182,9 +185,13 @@ async def run() -> None:
     log.info(
         "media_endpoints",
         images="fal" if config.images_on_fal else "compatible",
-        audio="fal" if config.audio_on_fal else "compatible",
+        audio="fal" if config.audio_on_fal else "local" if config.audio_on_local else "compatible",
         image_override=config.image_endpoint_overridden and not config.images_on_fal,
-        audio_override=config.audio_endpoint_overridden and not config.audio_on_fal,
+        audio_override=(
+            config.audio_endpoint_overridden
+            and not config.audio_on_fal
+            and not config.audio_on_local
+        ),
     )
     set_default_openai_client(client, use_for_tracing=False)
     set_tracing_disabled(True)

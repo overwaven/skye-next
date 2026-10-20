@@ -82,6 +82,7 @@ Everything else is optional and turns a capability on:
 | `SKYE_FAL_KEY` | Pictures and speech, separate from the chat provider |
 | `COMPOSIO_API_KEY` | Hosted app connectors |
 | `SKYE_SANDBOX_ENABLED=true` | The private code workspace |
+| `SKYE_AUDIO_PROVIDER=local` | Voice notes and replies on the host with Whisper large-v3-turbo and Supertonic 3 |
 | `SKYE_TOOL_STRICT=false` | A provider that rejects strict tool schemas (for example Beget) |
 | `SKYE_WEB_ORIGIN` | Public origin for webhook automation URLs |
 

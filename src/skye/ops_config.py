@@ -61,6 +61,13 @@ FIELD_GROUPS: dict[str, str] = {
     "skye_transcription_model": "Model provider",
     "skye_speech_model": "Model provider",
     "skye_speech_voice": "Model provider",
+    "skye_local_transcription_model": "Model provider",
+    "skye_local_speech_voice": "Model provider",
+    "skye_local_speech_lang": "Model provider",
+    "skye_local_speech_steps": "Model provider",
+    "skye_local_speech_speed": "Model provider",
+    "skye_local_cpu_threads": "Model provider",
+    "skye_models_dir": "Media",
     "skye_exa_api_key": "Model provider",
     "composio_api_key": "Model provider",
     "skye_connector_call_rub": "Model provider",
@@ -127,6 +134,13 @@ FIELD_LABELS: dict[str, str] = {
     "skye_transcription_model": "Transcription model",
     "skye_speech_model": "Speech model",
     "skye_speech_voice": "Speech voice",
+    "skye_local_transcription_model": "Local transcription model",
+    "skye_local_speech_voice": "Local speech voice",
+    "skye_local_speech_lang": "Local speech language",
+    "skye_local_speech_steps": "Local speech steps",
+    "skye_local_speech_speed": "Local speech speed",
+    "skye_local_cpu_threads": "Local speech CPU threads",
+    "skye_models_dir": "Local models directory",
     "skye_exa_api_key": "Exa key",
     "composio_api_key": "Composio key",
     "skye_connector_call_rub": "Connector call price",
@@ -185,7 +199,10 @@ FIELD_DESCRIPTIONS: dict[str, str] = {
     "skye_audio_base_url": "Defaults to the provider base URL when empty.",
     "skye_fal_key": "Key for fal.ai. Used by whichever capability is set to fal or auto.",
     "skye_image_provider": "auto uses fal when a key is set, else the chat provider.",
-    "skye_audio_provider": "auto uses fal when a key is set, else the chat provider.",
+    "skye_audio_provider": (
+        "auto uses fal when a key is set, else the chat provider. "
+        "local runs Whisper and Supertonic on this machine."
+    ),
     "skye_fal_image_model": "fal text-to-image endpoint used by generate_image.",
     "skye_fal_image_edit_model": "fal edit endpoint used by edit_image.",
     "skye_fal_speech_model": "fal text-to-speech endpoint used by send_voice.",
@@ -193,6 +210,18 @@ FIELD_DESCRIPTIONS: dict[str, str] = {
     "skye_transcription_model": "Speech-to-text model for voice notes and uploads.",
     "skye_speech_model": "Text-to-speech model for send_voice.",
     "skye_speech_voice": "Default voice for text-to-speech.",
+    "skye_local_transcription_model": (
+        "Whisper model used by the local backend. large-v3-turbo is the "
+        "CTranslate2 build of openai/whisper-large-v3-turbo."
+    ),
+    "skye_local_speech_voice": "Supertonic voice for the local backend: F1-F5 or M1-M5.",
+    "skye_local_speech_lang": (
+        "Supertonic language code, or na to skip the language tag and use the fallback."
+    ),
+    "skye_local_speech_steps": "Supertonic quality steps, 5 (low) to 12 (high).",
+    "skye_local_speech_speed": "Supertonic speaking rate, 0.7 to 2.0.",
+    "skye_local_cpu_threads": "CPU threads used by Whisper and Supertonic inference.",
+    "skye_models_dir": "Where local Whisper and Supertonic files are downloaded and kept.",
     "skye_exa_api_key": "Enables web_search and web_fetch. Without it those tools stay detached.",
     "composio_api_key": "Enables hosted app connectors through Composio.",
     "skye_connector_call_rub": "Flat rubles charged for one connector tool call.",

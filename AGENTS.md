@@ -47,7 +47,8 @@ on its next turn.
 - Config from the environment only (`pydantic-settings`); no YAML, no per-user
   keys.
 - Structured JSON logs through `structlog`.
-- Pictures and speech on the OpenAI-compatible endpoints, or directly on fal.ai.
+- Pictures and speech on the OpenAI-compatible endpoints, directly on fal.ai,
+  or entirely on this machine (Whisper large-v3-turbo and Supertonic 3).
 - Optional integrations: Exa for web search, a per-scope Docker sandbox for
   code, and Composio for hosted app connectors.
 

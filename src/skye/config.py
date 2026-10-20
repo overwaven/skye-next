@@ -139,11 +139,21 @@ class Settings(BaseSettings):
     # while the other runs on fal.
     skye_fal_key: str | None = None
     skye_image_provider: Literal["auto", "compatible", "fal"] = "auto"
-    skye_audio_provider: Literal["auto", "compatible", "fal"] = "auto"
+    skye_audio_provider: Literal["auto", "compatible", "fal", "local"] = "auto"
     skye_fal_image_model: str = "openai/gpt-image-2.5/flare/text-to-image"
     skye_fal_image_edit_model: str = "openai/gpt-image-2.5/flare/edit"
     skye_fal_speech_model: str = "google/gemini-3.8-flash-lite-tts"
     skye_fal_transcription_model: str = "fal-ai/elevenlabs/speech-to-text/scribe-v2"
+    # Local speech (SKYE_AUDIO_PROVIDER=local): Whisper large-v3-turbo on
+    # CTranslate2 for voice notes and Supertonic 3 on ONNX Runtime for replies.
+    # Both are CPU models; their files are downloaded once into SKYE_MODELS_DIR.
+    skye_local_transcription_model: str = "large-v3-turbo"
+    skye_local_speech_voice: str = "F1"
+    skye_local_speech_lang: str = "na"
+    skye_local_speech_steps: int = Field(default=8, ge=5, le=12)
+    skye_local_speech_speed: float = Field(default=1.0, ge=0.7, le=2.0)
+    skye_local_cpu_threads: int = Field(default=2, ge=1, le=32)
+    skye_models_dir: Path = Path("data/models")
     skye_media_group_settle_seconds: float = Field(default=0.75, ge=0.1, le=5.0)
     skye_group_context_messages: int = Field(default=20, ge=1, le=100)
     skye_group_context_message_chars: int = Field(default=1_500, ge=100, le=4_096)
@@ -283,7 +293,13 @@ class Settings(BaseSettings):
 
     @property
     def audio_on_fal(self) -> bool:
+        if self.skye_audio_provider == "local":
+            return False
         return self._picks_fal(self.skye_audio_provider)
+
+    @property
+    def audio_on_local(self) -> bool:
+        return self.skye_audio_provider == "local"
 
     def _picks_fal(self, provider: str) -> bool:
         if provider == "fal":

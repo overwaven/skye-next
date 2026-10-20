@@ -13,6 +13,7 @@ from openai import AsyncOpenAI, BadRequestError
 
 from .config import Settings
 from .fal import FalClient, FalError
+from .local_audio import LocalAudio
 
 log = structlog.get_logger()
 _SPEECH_SAMPLE_RATE = 24_000
@@ -20,11 +21,11 @@ _SPEECH_FORMAT = "mp3"
 
 
 class AudioService:
-    """Speech in and out, on fal.ai or an OpenAI-compatible audio endpoint.
+    """Speech in and out, on fal.ai, a compatible endpoint, or this machine.
 
     Transcription sends the audio bytes and returns text. Speech returns audio
-    bytes ready for a Telegram voice note: the compatible PCM path and the fal
-    Gemini WAV output are both transcoded to MP3.
+    bytes ready for a Telegram voice note: the compatible PCM path, the fal
+    Gemini WAV output, and the local Supertonic WAV are all transcoded to MP3.
     """
 
     def __init__(
@@ -35,15 +36,17 @@ class AudioService:
         speech_voice: str,
         client: AsyncOpenAI | None = None,
         fal: FalClient | None = None,
+        local: LocalAudio | None = None,
         speech_response_format: Literal["opus", "pcm"] = "pcm",
     ) -> None:
-        if (client is None) == (fal is None):
+        if sum(backend is not None for backend in (client, fal, local)) != 1:
             raise ValueError("Configure exactly one audio backend.")
         self.transcription_model = transcription_model
         self.speech_model = speech_model
         self.speech_voice = speech_voice
         self.client = client
         self.fal = fal
+        self.local = local
         self.speech_response_format = speech_response_format
 
     @classmethod
@@ -53,14 +56,22 @@ class AudioService:
         *,
         client: AsyncOpenAI | None = None,
         fal: FalClient | None = None,
+        local: LocalAudio | None = None,
     ) -> AudioService:
-        """Pick the fal model ids or the compatible ones from configuration."""
+        """Pick the fal, local, or compatible models from configuration."""
         if fal is not None:
             return cls(
                 transcription_model=config.skye_fal_transcription_model,
                 speech_model=config.skye_fal_speech_model,
                 speech_voice=config.skye_speech_voice,
                 fal=fal,
+            )
+        if local is not None:
+            return cls(
+                transcription_model=config.skye_local_transcription_model,
+                speech_model="supertonic-3",
+                speech_voice=config.skye_local_speech_voice,
+                local=local,
             )
         if client is not None:
             return cls(
@@ -72,6 +83,8 @@ class AudioService:
         raise ValueError("Configure exactly one audio backend.")
 
     async def transcribe(self, filename: str, data: bytes, mime: str = "") -> str:
+        if self.local is not None:
+            return await self.local.transcribe(filename, data, mime)
         if self.fal is not None:
             return await self._fal_transcribe(filename, data, mime)
         if self.client is None:
@@ -79,6 +92,8 @@ class AudioService:
         return await transcribe_audio(self.client, self.transcription_model, filename, data)
 
     async def speak(self, text: str, instructions: str) -> bytes:
+        if self.local is not None:
+            return to_mp3(await self.local.speak_wav(text, instructions))
         if self.fal is not None:
             return await self._fal_speak(text, instructions)
         if self.client is None:
