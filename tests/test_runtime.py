@@ -1,6 +1,7 @@
 import asyncio
 import base64
 import io
+import json
 import zipfile
 from types import SimpleNamespace
 from typing import Any, cast
@@ -8,8 +9,9 @@ from unittest.mock import AsyncMock, Mock, patch
 
 import httpx
 import pytest
-from agents import FunctionTool
-from openai import APIError, BadRequestError, RateLimitError
+from agents import FunctionTool, ModelSettings, function_tool
+from agents.models.interface import ModelTracing
+from openai import APIError, AsyncOpenAI, BadRequestError, RateLimitError
 
 from skye.artifacts import GeneratedFile
 from skye.audio import AudioService, _unwrap_audio_payload
@@ -1150,6 +1152,77 @@ def test_chat_model_provider_caches_models_by_name() -> None:
 
     assert provider.get_model(None) is provider.get_model("gpt-5.6-luna")
     assert provider.get_model("other") is not provider.get_model(None)
+
+
+async def test_chat_model_sends_strict_tools_to_openai_style_providers() -> None:
+    body = await _tool_request_body(tool_strict=True)
+
+    assert body["tools"][0]["function"]["strict"] is True
+
+
+async def test_chat_model_can_drop_strict_tools_for_compatible_providers() -> None:
+    body = await _tool_request_body(tool_strict=False)
+
+    assert body["tools"][0]["function"]["strict"] is False
+
+
+async def test_chat_model_provider_passes_tool_strict_to_its_models() -> None:
+    from skye.runtime import GuardedModelProvider
+
+    provider = GuardedModelProvider(config(skye_tool_strict=False), AsyncMock(), AsyncMock())
+
+    assert provider.get_model(None)._tool_strict is False  # type: ignore[attr-defined]
+
+
+async def _tool_request_body(*, tool_strict: bool) -> dict[str, Any]:
+    bodies: list[dict[str, Any]] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        bodies.append(cast(dict[str, Any], json.loads(request.content)))
+        return httpx.Response(
+            200,
+            json={
+                "id": "chatcmpl-1",
+                "object": "chat.completion",
+                "created": 0,
+                "model": "test-model",
+                "choices": [
+                    {
+                        "index": 0,
+                        "message": {"role": "assistant", "content": "ok"},
+                        "finish_reason": "stop",
+                    }
+                ],
+                "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+            },
+        )
+
+    @function_tool
+    async def ping() -> str:
+        """Ping."""
+        return "pong"
+
+    client = AsyncOpenAI(
+        api_key="sk-test",
+        base_url="https://model.test/v1",
+        max_retries=0,
+        http_client=httpx.AsyncClient(transport=httpx.MockTransport(handler)),
+    )
+    model = GuardedChatModel(
+        "test-model", client, AsyncMock(), 40_000, 50_000, 4_000, tool_strict
+    )
+    await model.get_response(
+        "instructions",
+        "hello",
+        ModelSettings(),
+        [ping],
+        None,
+        [],
+        ModelTracing.DISABLED,
+    )
+
+    assert len(bodies) == 1
+    return bodies[0]
 
 
 async def test_run_strips_sandbox_links_from_final_text() -> None:

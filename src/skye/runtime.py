@@ -389,12 +389,14 @@ class GuardedChatModel(OpenAIChatCompletionsModel):
         compaction_threshold_tokens: int,
         max_context_tokens: int,
         output_reserve: int,
+        tool_strict: bool = True,
     ) -> None:
         super().__init__(model, client)
         self._limiter = limiter
         self._compaction_threshold_tokens = compaction_threshold_tokens
         self._max_context_tokens = max_context_tokens
         self._output_reserve = output_reserve
+        self._tool_strict = tool_strict
 
     async def _admit(
         self,
@@ -484,6 +486,7 @@ class GuardedChatModel(OpenAIChatCompletionsModel):
         conversation_id: str | None = None,
         prompt: Any = None,
     ) -> AsyncIterator[Any]:
+        tools = _wire_tools(tools, self._tool_strict)
         await self._admit(system_instructions, input, tools)
         async for event in super().stream_response(
             system_instructions,
@@ -498,6 +501,49 @@ class GuardedChatModel(OpenAIChatCompletionsModel):
             prompt=prompt,
         ):
             yield event
+
+    async def get_response(
+        self,
+        system_instructions: str | None,
+        input: str | list[TResponseInputItem],
+        model_settings: ModelSettings,
+        tools: list[Tool],
+        output_schema: Any,
+        handoffs: list[Any],
+        tracing: Any,
+        previous_response_id: str | None = None,
+        conversation_id: str | None = None,
+        prompt: Any = None,
+    ) -> Any:
+        tools = _wire_tools(tools, self._tool_strict)
+        await self._admit(system_instructions, input, tools)
+        return await super().get_response(
+            system_instructions,
+            input,
+            model_settings,
+            tools,
+            output_schema,
+            handoffs,
+            tracing,
+            previous_response_id=previous_response_id,
+            conversation_id=conversation_id,
+            prompt=prompt,
+        )
+
+
+def _wire_tools(tools: list[Tool], strict: bool) -> list[Tool]:
+    """Adjust tools for providers that reject ``strict`` in function schemas.
+
+    The schemas themselves already follow the strict shape; only the flag on
+    the wire changes. Beget, for example, answers 400 for
+    ``tools[0].function.strict`` instead of ignoring it.
+    """
+    if strict:
+        return tools
+    return [
+        replace(tool, strict_json_schema=False) if isinstance(tool, FunctionTool) else tool
+        for tool in tools
+    ]
 
 
 class GuardedModelProvider(ModelProvider):
@@ -518,6 +564,7 @@ class GuardedModelProvider(ModelProvider):
                 self.config.skye_compaction_threshold_tokens,
                 self.config.skye_max_context_tokens,
                 self.config.skye_max_output_tokens,
+                self.config.skye_tool_strict,
             )
             self._models[name] = model
         return model

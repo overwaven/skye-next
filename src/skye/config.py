@@ -117,6 +117,10 @@ class Settings(BaseSettings):
     skye_tpm_budget: int = Field(default=1_800_000, ge=1)
     skye_max_concurrent_runs: int = Field(default=8, ge=1, le=64)
     skye_max_attachment_bytes: int = Field(default=25 * 1024 * 1024, ge=1)
+    # Advertise the tools' JSON schemas as strict, which OpenAI enforces.
+    # Some OpenAI-compatible providers (Beget answers 400 for
+    # ``tools[0].function.strict``) reject the parameter; turn it off there.
+    skye_tool_strict: bool = True
     skye_transcription_model: str = "gpt-transcribe"
     skye_speech_model: str = "gpt-4o-mini-tts"
     skye_speech_voice: str = "nova"
