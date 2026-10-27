@@ -328,7 +328,7 @@ class TelegramApp:
             message,
             "I can chat, search the web, work with images, "
             "run code in an isolated container, and use apps and skills you add.\n\n"
-            "/account — Skye plans, Telegram Stars, and cancellation\n\n"
+            "/account — Sparks balance and Telegram Stars\n\n"
             "/settings — reasoning, agent, memory, connectors, skills, and automations\n\n"
             "/projects — switch and manage project chats\n\n"
             "/agents — create, install, select, and share agents\n\n"
@@ -2558,7 +2558,7 @@ TERMS_URL = "https://docs.skye-bot.com/terms"
 COMMANDS = [
     BotCommand(command="start", description="Start Skye"),
     BotCommand(command="help", description="Show capabilities"),
-    BotCommand(command="account", description="Skye plans and Telegram Stars"),
+    BotCommand(command="account", description="Sparks balance and Telegram Stars"),
     BotCommand(command="settings", description="Model, agent, memory, connectors, and skills"),
     BotCommand(command="agents", description="Create and manage agents"),
     BotCommand(command="reset", description="Start a new conversation"),
@@ -2570,7 +2570,7 @@ COMMANDS = [
 PRIVATE_COMMANDS = [
     BotCommand(command="start", description="Start Skye"),
     BotCommand(command="help", description="Show capabilities"),
-    BotCommand(command="account", description="Skye plans and Telegram Stars"),
+    BotCommand(command="account", description="Sparks balance and Telegram Stars"),
     BotCommand(command="settings", description="Model, agent, memory, connectors, and skills"),
     BotCommand(command="projects", description="Switch and manage project chats"),
     BotCommand(command="agents", description="Create and manage agents"),
