@@ -41,6 +41,12 @@ from .models import (
 )
 
 SCHEMA = """
+CREATE TABLE IF NOT EXISTS user_model_preferences (
+    user_id INTEGER PRIMARY KEY,
+    text_model TEXT,
+    image_model TEXT
+);
+
 CREATE TABLE IF NOT EXISTS access_entries (
     kind TEXT NOT NULL CHECK (kind IN ('user', 'chat')),
     telegram_id INTEGER NOT NULL,
@@ -944,6 +950,24 @@ class Database:
                 (user_id, now),
             )
         return True
+
+    async def model_preferences(self, user_id: int) -> tuple[str | None, str | None]:
+        cursor = await self.conn.execute(
+            "SELECT text_model, image_model FROM user_model_preferences WHERE user_id = ?",
+            (user_id,),
+        )
+        row = await cursor.fetchone()
+        return (row["text_model"], row["image_model"]) if row else (None, None)
+
+    async def set_model_preference(self, user_id: int, kind: str, model: str) -> None:
+        if kind not in {"text", "image"}:
+            raise ValueError("Unknown model kind")
+        column = f"{kind}_model"
+        await self._write(
+            f"""INSERT INTO user_model_preferences (user_id, {column}) VALUES (?, ?)
+                ON CONFLICT(user_id) DO UPDATE SET {column} = excluded.{column}""",
+            (user_id, model),
+        )
 
     async def get_settings(self, scope: Scope) -> ChatSettings:
         table, key = self._settings_table(scope)

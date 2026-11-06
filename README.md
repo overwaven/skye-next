@@ -72,7 +72,10 @@ cp .env.example .env   # fill in the required values below
 docker compose up -d --build
 ```
 
-Only two variables are required: `TELEGRAM_BOT_TOKEN` from [@BotFather](https://t.me/BotFather), and `SKYE_OWNER_IDS` — the comma-separated Telegram user ids allowed to administer the bot. Add one model key on top: `SKYE_PROVIDER_API_KEY` with any OpenAI-compatible `SKYE_PROVIDER_BASE_URL`, or `OPENAI_API_KEY`, or `OPENROUTER_API_KEY`.
+Set `TELEGRAM_BOT_TOKEN` from [@BotFather](https://t.me/BotFather), `SKYE_OWNER_IDS`
+(the comma-separated Telegram user IDs allowed to administer the bot), and
+`OPENROUTER_API_KEY`. All model capabilities use OpenRouter; see `.env.example`
+for configuration.
 
 Everything else is optional and turns a capability on:
 

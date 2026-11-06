@@ -27,6 +27,42 @@ def test_inline_keyboards_receive_semantic_custom_icons() -> None:
     assert decorated.inline_keyboard[2][0].icon_custom_emoji_id == Icon.BACK
 
 
+def test_model_settings_use_the_skye_logo() -> None:
+    markup = InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text="Your models", callback_data="settings:models")]
+        ]
+    )
+
+    assert decorate_keyboard(markup).inline_keyboard[0][0].icon_custom_emoji_id == Icon.SKYE
+
+
+def test_decoration_preserves_model_logos_and_selected_tab_color() -> None:
+    markup = InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text="Text",
+                    callback_data="pick:1:text:open",
+                    style="success",
+                    icon_custom_emoji_id=Icon.MESSAGE,
+                )
+            ],
+            [
+                InlineKeyboardButton(
+                    text="GPT-6.1 Sol",
+                    callback_data="pick:1:text:model",
+                    icon_custom_emoji_id=Icon.OPENAI,
+                )
+            ],
+        ]
+    )
+
+    decorated = decorate_keyboard(markup)
+    assert decorated.inline_keyboard[0][0].style == "success"
+    assert decorated.inline_keyboard[1][0].icon_custom_emoji_id == Icon.OPENAI
+
+
 def test_button_actions_override_their_feature_icon() -> None:
     markup = InlineKeyboardMarkup(
         inline_keyboard=[

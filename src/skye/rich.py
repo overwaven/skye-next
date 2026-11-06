@@ -73,7 +73,6 @@ def sparks_amount(milli: int) -> list[RichTextUnion]:
     return [format_milli(milli), " ", sparks_mark()]
 
 
-
 def format_tokens(value: int) -> str:
     if value >= 1000:
         text = f"{value / 1000:.1f}".rstrip("0").rstrip(".")
@@ -216,6 +215,7 @@ class RichMessages:
             reply_parameters=quote_reply(reply_to),
             reply_markup=reply_markup,
         )
+
     async def delete(self, message: Message) -> None:
         with suppress(TelegramBadRequest):
             await self.bot.delete_message(chat_id=message.chat.id, message_id=message.message_id)
@@ -227,6 +227,15 @@ class RichMessages:
             message_thread_id=api_thread_id(target),
             draft_id=target.message_id,
             rich_message=content,
+        )
+
+    @staticmethod
+    def models() -> InputRichMessage:
+        return InputRichMessage(
+            blocks=[
+                InputRichBlockSectionHeading(text="Models", size=2),
+                InputRichBlockParagraph(text="Choose a model for text or images."),
+            ]
         )
 
     @staticmethod
@@ -286,15 +295,11 @@ class RichMessages:
                 InputRichBlockParagraph(text="Start with something useful."),
                 InputRichBlockList(
                     items=[
-                        InputRichBlockListItem(
-                            blocks=[InputRichBlockParagraph(text=item)]
-                        )
+                        InputRichBlockListItem(blocks=[InputRichBlockParagraph(text=item)])
                         for item in items
                     ]
                 ),
-                InputRichBlockParagraph(
-                    text="Use your own words. I will choose the right tools."
-                ),
+                InputRichBlockParagraph(text="Use your own words. I will choose the right tools."),
             ]
         )
 
@@ -327,9 +332,7 @@ class RichMessages:
                 InputRichBlockParagraph(text=f"Free access. {SPARKS_NAME} are not charged.")
             )
         else:
-            blocks.append(
-                InputRichBlockParagraph(text=["Balance: ", *sparks_amount(balance)])
-            )
+            blocks.append(InputRichBlockParagraph(text=["Balance: ", *sparks_amount(balance)]))
         if allowance is not None:
             blocks.append(InputRichBlockSectionHeading(text="Free allowance", size=3))
             rows = [

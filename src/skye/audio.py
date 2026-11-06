@@ -37,7 +37,7 @@ class AudioService:
         client: AsyncOpenAI | None = None,
         fal: FalClient | None = None,
         local: LocalAudio | None = None,
-        speech_response_format: Literal["opus", "pcm"] = "pcm",
+        speech_response_format: Literal["opus", "pcm", "mp3"] = "pcm",
     ) -> None:
         if sum(backend is not None for backend in (client, fal, local)) != 1:
             raise ValueError("Configure exactly one audio backend.")
@@ -79,6 +79,9 @@ class AudioService:
                 speech_model=config.skye_speech_model,
                 speech_voice=config.skye_speech_voice,
                 client=client,
+                speech_response_format=(
+                    "mp3" if "openrouter.ai" in str(getattr(client, "base_url", "")) else "pcm"
+                ),
             )
         raise ValueError("Configure exactly one audio backend.")
 

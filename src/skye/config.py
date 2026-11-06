@@ -1,22 +1,21 @@
 from pathlib import Path
 from typing import Annotated, Literal
+from urllib.parse import urlsplit
 
 from pydantic import BeforeValidator, Field, ValidationInfo, field_validator, model_validator
 from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
+from .model_catalog import IMAGE_MODELS, TEXT_MODELS, PickerModel
+
 ModelId = str
 Reasoning = Literal["none", "low", "medium", "high", "xhigh", "max"]
 
-HOSTED_MODEL: ModelId = "gpt-5.6-luna"
-MODELS: dict[ModelId, str] = {
-    "gpt-5.6-luna": "Luna",
-    "gpt-5.6-terra": "Terra",
-    "gpt-5.6-sol": "Sol",
-}
+HOSTED_MODEL: ModelId = "deepseek/deepseek-v4.1-flash-1017"
+MODELS: dict[ModelId, str] = {model.id: model.name for model in TEXT_MODELS}
 
 
-def clamp_model(_model: str | None) -> ModelId:
-    return HOSTED_MODEL
+def clamp_model(model: str | None) -> ModelId:
+    return model if model in MODELS else HOSTED_MODEL
 
 
 def _ids(value: object) -> frozenset[int]:
@@ -108,6 +107,16 @@ class Settings(BaseSettings):
     skye_files_group_count: int = Field(default=20, ge=1)
     skye_base_prompt_path: Path = Path("BASE_PROMPT.md")
     skye_default_model: ModelId = HOSTED_MODEL
+    skye_text_models: list[PickerModel] = Field(
+        default_factory=lambda: list(TEXT_MODELS), min_length=1
+    )
+    skye_image_models: list[PickerModel] = Field(
+        default_factory=lambda: list(IMAGE_MODELS), min_length=1
+    )
+    skye_moderation_enabled: bool = True
+    skye_moderation_model: str = "cloudflare/clef"
+    skye_moderation_extraction_model: str = "cloudflare/clairic"
+    skye_moderation_threshold: float = Field(default=0.5, gt=0, lt=1)
     skye_default_reasoning: Reasoning = "medium"
     skye_max_turns: int = Field(default=20, ge=2, le=100)
     skye_run_timeout_seconds: int = Field(default=300, ge=10, le=1800)
@@ -121,10 +130,10 @@ class Settings(BaseSettings):
     # Some OpenAI-compatible providers (Beget answers 400 for
     # ``tools[0].function.strict``) reject the parameter; turn it off there.
     skye_tool_strict: bool = True
-    skye_transcription_model: str = "gpt-transcribe"
-    skye_speech_model: str = "gpt-4o-mini-tts"
-    skye_speech_voice: str = "nova"
-    skye_image_model: str = "gpt-image-2"
+    skye_transcription_model: str = "mistralai/voxtral-small-transcribe-3-0"
+    skye_speech_model: str = "mistralai/voxtral-mini-tts-3-0"
+    skye_speech_voice: str = "gb_jane_neutral"
+    skye_image_model: str = "google/gemini-nano-banana-2.1"
     # Send raw audio and non-PDF documents as native model inputs. Off by
     # default: transcription and local text extraction work with text+image
     # models (for example DeepSeek V4) whose providers reject audio/files.
@@ -138,8 +147,8 @@ class Settings(BaseSettings):
     # keep a capability on the chat provider (for example images on Selectel)
     # while the other runs on fal.
     skye_fal_key: str | None = None
-    skye_image_provider: Literal["auto", "compatible", "fal"] = "auto"
-    skye_audio_provider: Literal["auto", "compatible", "fal", "local"] = "auto"
+    skye_image_provider: Literal["auto", "compatible", "fal"] = "compatible"
+    skye_audio_provider: Literal["auto", "compatible", "fal", "local"] = "compatible"
     skye_fal_image_model: str = "openai/gpt-image-2.5/flare/text-to-image"
     skye_fal_image_edit_model: str = "openai/gpt-image-2.5/flare/edit"
     skye_fal_speech_model: str = "google/gemini-3.8-flash-lite-tts"
@@ -166,6 +175,24 @@ class Settings(BaseSettings):
     # Retail Sparks charged per 1 ₽ of provider-reported cost. The fallback
     # catalog in ``pricing.py`` is used when a provider reports no cost.
     skye_sparks_per_rub: float = Field(default=1.0, gt=0)
+    skye_usd_to_rub: float = Field(default=100.0, gt=0)
+
+    def require_openrouter(self) -> None:
+        """Production uses OpenRouter only; never silently fall back to another backend."""
+        for endpoint in (self.provider_base_url, self.image_base_url, self.audio_base_url):
+            parsed = urlsplit(endpoint or "")
+            if (
+                parsed.scheme != "https"
+                or parsed.hostname != "openrouter.ai"
+                or parsed.path.rstrip("/") != "/api/v1"
+            ):
+                raise ValueError("All model endpoints must be https://openrouter.ai/api/v1")
+        if self.images_on_fal or self.audio_on_fal or self.audio_on_local:
+            raise ValueError("Set SKYE_IMAGE_PROVIDER and SKYE_AUDIO_PROVIDER to compatible")
+        if self.skye_default_model not in {model.id for model in self.skye_text_models}:
+            raise ValueError("SKYE_DEFAULT_MODEL must appear in SKYE_TEXT_MODELS")
+        if self.skye_image_model not in {model.id for model in self.skye_image_models}:
+            raise ValueError("SKYE_IMAGE_MODEL must appear in SKYE_IMAGE_MODELS")
 
     @field_validator("skye_group_context_total_chars")
     @classmethod
@@ -234,14 +261,15 @@ class Settings(BaseSettings):
 
     @model_validator(mode="after")
     def _provider_key_is_required(self) -> Settings:
-        has_key = bool(
-            self.skye_provider_api_key or self.openai_api_key or self.openrouter_api_key
-        )
+        has_key = bool(self.skye_provider_api_key or self.openai_api_key or self.openrouter_api_key)
         if not has_key:
             msg = "SKYE_PROVIDER_API_KEY, OPENAI_API_KEY or OPENROUTER_API_KEY is required"
             raise ValueError(msg)
         if not self.skye_default_model.strip():
             raise ValueError("SKYE_DEFAULT_MODEL must not be empty")
+        for entries in (self.skye_text_models, self.skye_image_models):
+            if len({entry.id for entry in entries}) != len(entries):
+                raise ValueError("Picker model IDs must be unique")
         if self.skye_image_provider == "fal" and not self.skye_fal_key:
             raise ValueError("SKYE_FAL_KEY is required when SKYE_IMAGE_PROVIDER is fal")
         if self.skye_audio_provider == "fal" and not self.skye_fal_key:
@@ -261,7 +289,7 @@ class Settings(BaseSettings):
             return self.skye_provider_base_url
         if self.openrouter_api_key and not self.skye_provider_api_key:
             return "https://openrouter.ai/api/v1"
-        return None
+        return "https://openrouter.ai/api/v1"
 
     @property
     def image_api_key(self) -> str:

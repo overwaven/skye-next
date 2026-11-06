@@ -854,6 +854,7 @@ def runtime_for_run(
 ) -> AgentRuntime:
     conversations = AsyncMock()
     conversations.get_or_create.return_value = "conv_1"
+    conversations.database.model_preferences.return_value = (None, None)
     return AgentRuntime(
         config(**config_overrides),
         conversations,
@@ -1150,7 +1151,7 @@ def test_chat_model_provider_caches_models_by_name() -> None:
 
     provider = GuardedModelProvider(config(), AsyncMock(), AsyncMock())
 
-    assert provider.get_model(None) is provider.get_model("gpt-5.6-luna")
+    assert provider.get_model(None) is provider.get_model(config().skye_default_model)
     assert provider.get_model("other") is not provider.get_model(None)
 
 

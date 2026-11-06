@@ -4,7 +4,7 @@ import asyncio
 import base64
 import time
 from dataclasses import dataclass, field
-from typing import Any, Protocol
+from typing import TYPE_CHECKING, Any, Protocol
 
 import httpx
 import structlog
@@ -14,6 +14,9 @@ from openai import APIError, AsyncOpenAI
 from .fal import FalClient, FalError
 from .library import MediaLibrary
 from .models import Scope
+
+if TYPE_CHECKING:
+    from .moderation import ModerationService
 
 log = structlog.get_logger()
 MAX_SOURCE_IMAGES = 4
@@ -57,14 +60,42 @@ class ImageService:
         *,
         poll_interval_seconds: float = 4.0,
         poll_timeout_seconds: float = 180.0,
+        moderation: ModerationService | None = None,
     ) -> None:
         self.client = client
         self.model = model
         self.max_bytes = max_bytes
         self.poll_interval_seconds = poll_interval_seconds
         self.poll_timeout_seconds = poll_timeout_seconds
+        self.moderation = moderation
+        self.cost_usd: float | None = None
+
+    async def _check(self, prompt: str, sources: list[tuple[str, bytes]]) -> None:
+        if self.moderation is not None:
+            notice = await self.moderation.check(
+                [
+                    {
+                        "content": [
+                            {"type": "input_text", "text": prompt},
+                            *[
+                                {"type": "input_image", "image_url": _data_url(data)}
+                                for _, data in sources
+                            ],
+                        ]
+                    }
+                ]
+            )
+            if notice:
+                raise ValueError(notice)
 
     async def generate(self, prompt: str) -> bytes:
+        await self._check(prompt, [])
+        if "openrouter.ai" in str(getattr(self.client, "base_url", "")):
+            return await self._resolve(
+                await self.client.post(
+                    "/images", body={"model": self.model, "prompt": prompt}, cast_to=dict[str, Any]
+                )
+            )
         payload = await self.client.post(
             "/images/generations",
             body={"model": self.model, "prompt": prompt},
@@ -73,6 +104,9 @@ class ImageService:
         return await self._resolve(payload)
 
     async def edit(self, prompt: str, sources: list[tuple[str, bytes]]) -> bytes:
+        await self._check(prompt, sources)
+        if "openrouter.ai" in str(getattr(self.client, "base_url", "")):
+            return await self._resolve(await self._edit_fallback(prompt, sources))
         files = [
             (
                 "image",
@@ -98,9 +132,7 @@ class ImageService:
             payload = await self._edit_fallback(prompt, sources)
         return await self._resolve(payload)
 
-    async def _edit_fallback(
-        self, prompt: str, sources: list[tuple[str, bytes]]
-    ) -> dict[str, Any]:
+    async def _edit_fallback(self, prompt: str, sources: list[tuple[str, bytes]]) -> dict[str, Any]:
         """Edit through a gateway's media route when ``/images/edits`` is absent.
 
         OpenRouter exposes image editing on ``POST /images`` with
@@ -133,9 +165,7 @@ class ImageService:
                 "model": self.model,
                 "input": {
                     "prompt": prompt,
-                    "images": [
-                        {"type": "base64", "data": _data_url(data)} for _, data in sources
-                    ],
+                    "images": [{"type": "base64", "data": _data_url(data)} for _, data in sources],
                 },
             },
             cast_to=dict[str, Any],
@@ -147,6 +177,9 @@ class ImageService:
         Accepts a direct Images payload, a completed media object, or a task
         id that is polled until the picture (or a failure) arrives.
         """
+        cost = payload.get("usage", {}).get("cost")
+        if isinstance(cost, (int, float)) and cost >= 0:
+            self.cost_usd = (self.cost_usd or 0.0) + cost
         direct = _payload_url_or_b64(payload)
         if direct is not None:
             return await self._bytes(direct)
@@ -426,9 +459,7 @@ class TurnImages:
 
         return [generate_image, edit_image]
 
-    def _select(
-        self, names: list[str] | None
-    ) -> tuple[list[tuple[str, bytes]], str | None]:
+    def _select(self, names: list[str] | None) -> tuple[list[tuple[str, bytes]], str | None]:
         """Resolve which pictures to edit: the attached message, or named files.
 
         There is no implicit fallback: pictures from earlier messages are only
@@ -449,11 +480,7 @@ class TurnImages:
         return self.sources, None
 
     def _no_source_message(self) -> str:
-        if (
-            self.library is not None
-            and self.scope is not None
-            and self.library.images(self.scope)
-        ):
+        if self.library is not None and self.scope is not None and self.library.images(self.scope):
             return (
                 "Name the saved picture to edit with files, for example "
                 '["image-1.jpg"], or ask the user to attach it again.'

@@ -56,9 +56,10 @@ from .connectors import ConnectorService, ConnectorSession
 from .conversations import ConversationService
 from .custom_agents import AGENT_CAPABILITIES, AgentComposition, CustomAgentService
 from .exa import ExaService
-from .images import ImageProvider, TurnImages, turn_sources
+from .images import ImageProvider, ImageService, TurnImages, turn_sources
 from .library import MediaLibrary
 from .memory import MemoryService
+from .model_catalog import TEXT_USD
 from .models import (
     AgentCapability,
     ChatSettings,
@@ -67,7 +68,8 @@ from .models import (
     Scope,
     Skill,
 )
-from .pricing import TurnUsage
+from .moderation import ModerationService
+from .pricing import DEFAULT_IMAGE_PRICE, IMAGE_PRICES, TurnUsage
 from .sandbox import SandboxService, ScopeSandbox, turn_files
 from .sessions import DatabaseSession, without_inline_payloads
 from .skills import SkillService
@@ -742,8 +744,10 @@ class AgentRuntime:
         sandbox: SandboxService | None = None,
         audio: AudioService | None = None,
         files: MediaLibrary | None = None,
+        moderation: ModerationService | None = None,
     ) -> None:
         self.config = config
+        self.moderation = moderation
         self.conversations = conversations
         self.memory = memory
         self.custom_agents = custom_agents
@@ -788,6 +792,23 @@ class AgentRuntime:
         awaiting_reply: bool = True,
     ) -> RunOutput:
         key = run_key or telegram_run_key(context.chat_id, context.thread_id)
+        text_model, image_model = await self.conversations.database.model_preferences(
+            context.user_id
+        )
+        allowed_text = {item.id for item in self.config.skye_text_models}
+        allowed_images = {item.id for item in self.config.skye_image_models}
+        settings = replace(
+            settings,
+            model=text_model if text_model in allowed_text else self.config.skye_default_model,
+        )
+        selected_images = self.images
+        if isinstance(self.images, ImageService):
+            selected_images = ImageService(
+                self.images.client,
+                image_model if image_model in allowed_images else self.config.skye_image_model,
+                self.images.max_bytes,
+                moderation=self.moderation,
+            )
         delivery = TurnDelivery(
             on_reply=on_reply,
             on_voice=on_voice,
@@ -818,10 +839,15 @@ class AgentRuntime:
             try:
                 if active.cancel.is_set():
                     raise asyncio.CancelledError
-                session_id = (
-                    conversation_id
-                    or await self.conversations.get_or_create(context.chat_id, context.thread_id)
+                session_id = conversation_id or await self.conversations.get_or_create(
+                    context.chat_id, context.thread_id
                 )
+                if self.moderation is not None:
+                    history = await self.conversations.database.session_items(session_id)
+                    notice = await self.moderation.check(user_input, history=history)
+                    if notice:
+                        await delivery.send(notice)
+                        return RunOutput(notice, (), sent=delivery.sent)
                 memory_context = ""
                 if settings.memory_enabled:
                     memory_context = await self.memory.context(
@@ -840,9 +866,7 @@ class AgentRuntime:
                         self.connectors.open(context)
                     )
                 connector_tools = () if connector_session is None else connector_session.tools
-                connector_labels = (
-                    () if connector_session is None else connector_session.labels
-                )
+                connector_labels = () if connector_session is None else connector_session.labels
                 skills: tuple[Skill, ...] = ()
                 if self.skills is not None:
                     skills = await self.skills.mounted(context.scope)
@@ -861,7 +885,7 @@ class AgentRuntime:
                         except (OSError, ValueError) as error:
                             log.warning("library_save_failed", error=type(error).__name__)
                 turn_images: TurnImages | None = None
-                if self.images is not None:
+                if selected_images is not None:
                     sources: list[tuple[str, bytes]] = []
                     if self.client is not None:
                         sources = await turn_sources(
@@ -870,7 +894,7 @@ class AgentRuntime:
                             self.config.skye_max_attachment_bytes,
                         )
                     turn_images = TurnImages(
-                        self.images,
+                        selected_images,
                         requested_image_limit(user_input),
                         sources,
                         library=self.files,
@@ -933,10 +957,40 @@ class AgentRuntime:
                         files = (*output.files, *auto_files, *delivery.files)
                         usage = replace(
                             output.usage,
-                            connector_calls=(
-                                connector_session.calls if connector_session else 0
+                            model=settings.model,
+                            image_model=(
+                                selected_images.model
+                                if isinstance(selected_images, ImageService)
+                                else output.usage.image_model
                             ),
+                            connector_calls=(connector_session.calls if connector_session else 0),
                         )
+                        if "openrouter.ai" in (self.config.provider_base_url or ""):
+                            chat_cost_usd = usage.provider_cost_rub
+                            if chat_cost_usd is None and settings.model in TEXT_USD:
+                                inp, out, cached = TEXT_USD[settings.model]
+                                chat_cost_usd = (
+                                    max(0, usage.input_tokens - usage.cached_tokens) * inp
+                                    + usage.output_tokens * out
+                                    + usage.cached_tokens * cached
+                                ) / 1_000_000
+                            image_cost = (
+                                selected_images.cost_usd * self.config.skye_usd_to_rub
+                                if isinstance(selected_images, ImageService)
+                                and selected_images.cost_usd is not None
+                                else usage.images
+                                * IMAGE_PRICES.get(usage.image_model or "", DEFAULT_IMAGE_PRICE)
+                            )
+                            if chat_cost_usd is not None:
+                                usage = replace(
+                                    usage,
+                                    provider_cost_rub=(
+                                        chat_cost_usd * self.config.skye_usd_to_rub
+                                        + image_cost
+                                        + usage.connector_calls
+                                        * self.config.skye_connector_call_rub
+                                    ),
+                                )
                         log.info(
                             "turn_finished",
                             kind="turn",
@@ -1090,9 +1144,7 @@ class AgentRuntime:
             with attempt:
                 if active.cancel.is_set():
                     raise asyncio.CancelledError
-                checkpoint = await self.conversations.database.session_item_count(
-                    conversation_id
-                )
+                checkpoint = await self.conversations.database.session_item_count(conversation_id)
                 try:
                     return await self._consume_stream(
                         agent, user_input, conversation_id, active, on_event, turn_images
@@ -1246,9 +1298,7 @@ class AgentRuntime:
         if on_event is not None:
             for image in images:
                 await on_event(RunEvent(kind="image", image=image))
-        details = _usage_details(
-            result, images=len(images), image_model=self._image_model()
-        )
+        details = _usage_details(result, images=len(images), image_model=self._image_model())
         usage = details.total_tokens
         if usage <= 0:
             usage = _usage_tokens(result) or estimate_usage_tokens(user_input, final)
@@ -1303,7 +1353,7 @@ class AgentRuntime:
                 continue
             try:
                 data = self.files.read(sandbox.scope, entry.name)
-            except (OSError, ValueError):
+            except OSError, ValueError:
                 continue
             sandbox.seed_if_absent([(entry.name, data)])
 
@@ -1387,7 +1437,7 @@ class AgentRuntime:
         return Agent(
             name=active.version.name if active else "Skye",
             instructions=instructions,
-            model=self.config.skye_default_model,
+            model=settings.model,
             model_settings=self._model_settings(
                 context,
                 settings,
@@ -1565,7 +1615,7 @@ class AgentRuntime:
         return Agent(
             name=installed.version.name,
             instructions=instructions,
-            model=self.config.skye_default_model,
+            model=settings.model,
             model_settings=self._model_settings(
                 context,
                 settings,
@@ -1845,9 +1895,7 @@ def _input_metadata(user_input: str | list[TResponseInputItem]) -> tuple[int, in
     return chars, attachments
 
 
-def describe_tool_event(
-    event: object, tool_names: dict[str, str] | None = None
-) -> RunEvent | None:
+def describe_tool_event(event: object, tool_names: dict[str, str] | None = None) -> RunEvent | None:
     event_name = getattr(event, "name", None)
     item = getattr(event, "item", None)
     if event_name not in {"tool_called", "tool_output"} or item is None:
@@ -1891,7 +1939,7 @@ def _as_text(value: Any) -> str:
     if isinstance(value, dict):
         try:
             return json.dumps(value, ensure_ascii=False, separators=(",", ":"))
-        except (TypeError, ValueError):
+        except TypeError, ValueError:
             return ""
     return ""
 

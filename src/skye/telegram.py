@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import io
 import json
 import re
@@ -50,6 +51,7 @@ from .group_context import GroupContextService
 from .growth import ACTIVATION_BONUS, GrowthService
 from .media_groups import MediaGroupService
 from .memory import MemoryService
+from .model_catalog import PickerPrices
 from .models import (
     AccessEffect,
     AccessEntry,
@@ -93,7 +95,7 @@ from .telegram_projects import (
     project_reply_keyboard,
 )
 from .telegram_threads import thread_id
-from .ui import activity_message
+from .ui import MODEL_PROVIDER_ICONS, Icon, activity_message
 
 log = structlog.get_logger()
 REASONING: tuple[Reasoning, ...] = ("none", "low", "medium", "high", "xhigh", "max")
@@ -153,9 +155,7 @@ class UpdateMiddleware(BaseMiddleware):
                 await self.groups.capture(incoming)
                 sender = incoming.from_user
                 if sender is not None:
-                    name = " ".join(
-                        part for part in (sender.first_name, sender.last_name) if part
-                    )
+                    name = " ".join(part for part in (sender.first_name, sender.last_name) if part)
                     await self.database.remember_user(
                         sender.id, sender.username, name or sender.username or ""
                     )
@@ -189,6 +189,7 @@ class TelegramApp:
         automations: AutomationService | None = None,
     ) -> None:
         self.config = config
+        self.picker_prices = PickerPrices()
         self.bot = bot
         self.database = database
         self.access = access
@@ -227,6 +228,7 @@ class TelegramApp:
         self.router.message.register(self.paysupport, Command("paysupport"))
         self.router.message.register(self.terms, Command("terms"))
         self.router.message.register(self.settings, Command("settings"))
+        self.router.message.register(self.models, Command("models"))
         self.router.message.register(self.projects, Command("projects"))
         self.router.message.register(
             self.projects,
@@ -245,6 +247,7 @@ class TelegramApp:
         self.router.message.register(self.retry, Command("retry"))
         self.router.message.register(self.admin, Command("admin"))
         self.router.callback_query.register(self.settings_callback, F.data.startswith("settings:"))
+        self.router.callback_query.register(self.models_callback, F.data.startswith("pick:"))
         self.router.callback_query.register(self.account_callback, F.data.startswith("acct:"))
         self.router.callback_query.register(self.projects_callback, F.data.startswith("proj:"))
         self.router.callback_query.register(self.connectors_callback, F.data.startswith("conn:"))
@@ -396,6 +399,92 @@ class TelegramApp:
             return
         await self.account.refunded_payment(message, context)
 
+    async def models(self, message: Message) -> None:
+        context = self._context(message)
+        if context is None or not await self._require_access(message, context):
+            return
+        await self._show_models(message, context, "text", edit=False)
+
+    async def _show_models(
+        self, message: Message, context: RequestContext, kind: str, *, edit: bool
+    ) -> None:
+        models = self.config.skye_image_models if kind == "image" else self.config.skye_text_models
+        text_model, image_model = await self.database.model_preferences(context.user_id)
+        selected = (
+            image_model or self.config.skye_image_model
+            if kind == "image"
+            else text_model or self.config.skye_default_model
+        )
+        prices = await self.picker_prices.labels(models, images=kind == "image")
+        rows: list[list[InlineKeyboardButton]] = [
+            [
+                InlineKeyboardButton(
+                    text=label,
+                    callback_data=f"pick:{context.user_id}:{tab}:open",
+                    style="success" if kind == tab else None,
+                    icon_custom_emoji_id=icon,
+                )
+                for tab, label, icon in (
+                    ("image", "Image", Icon.IMAGE),
+                    ("text", "Text", Icon.MESSAGE),
+                )
+            ],
+            [
+                InlineKeyboardButton(
+                    text="Back", callback_data="settings:back", icon_custom_emoji_id=Icon.BACK
+                )
+            ],
+        ]
+        for model, price in zip(models, prices, strict=True):
+            label = f"{'✓ ' if model.id == selected else ''}{model.name} · {model.tier} · {price}"
+            rows.append(
+                [
+                    InlineKeyboardButton(
+                        text=label,
+                        icon_custom_emoji_id=MODEL_PROVIDER_ICONS.get(model.id.partition("/")[0]),
+                        callback_data=(
+                            f"pick:{context.user_id}:{kind}:"
+                            f"{hashlib.sha256(model.id.encode()).hexdigest()[:12]}"
+                        ),
+                    )
+                ]
+            )
+        send = self.rich.edit if edit else self.rich.send
+        await send(
+            message, RichMessages.models(), reply_markup=InlineKeyboardMarkup(inline_keyboard=rows)
+        )
+
+    async def models_callback(self, callback: CallbackQuery) -> None:
+        if not isinstance(callback.message, Message) or not callback.data:
+            await callback.answer()
+            return
+        context = self._context(callback.message, callback.from_user)
+        parts = callback.data.split(":")
+        if context is None or not await self.access.allowed(context):
+            await callback.answer("Access denied", show_alert=True)
+            return
+        if len(parts) != 4 or parts[1] != str(context.user_id):
+            await callback.answer("Open /models to choose your own model.", show_alert=True)
+            return
+        kind, index = parts[2:]
+        if kind not in {"text", "image"}:
+            await callback.answer("Unknown model type", show_alert=True)
+            return
+        models = self.config.skye_image_models if kind == "image" else self.config.skye_text_models
+        if index != "open":
+            selected = next(
+                (m for m in models if hashlib.sha256(m.id.encode()).hexdigest()[:12] == index),
+                None,
+            )
+            if selected is None:
+                await callback.answer(
+                    "This picker has expired. Open /models again.", show_alert=True
+                )
+                return
+            await self.database.set_model_preference(context.user_id, kind, selected.id)
+        await callback.answer("Model selected" if index != "open" else None)
+        await self._show_models(callback.message, context, kind, edit=True)
+
     async def settings(self, message: Message) -> None:
         context = self._context(message)
         if context is None or not await self._require_access(message, context):
@@ -423,6 +512,10 @@ class TelegramApp:
             return
         editable = await self._can_edit(context)
         action = callback.data.split(":")
+        if action == ["settings", "models"]:
+            await callback.answer()
+            await self._show_models(callback.message, context, "text", edit=True)
+            return
         if action == ["settings", "autos"]:
             if self.automation_panel is None:
                 await callback.answer()
@@ -1163,9 +1256,7 @@ class TelegramApp:
                 target = self._admin_scope(action[2], action[3])
                 await self._show_admin_entry(callback.message, context, target)
             elif len(action) == 4 and action[:2] == ["admin", "bal"]:
-                await self._admin_balance(
-                    callback.message, context, state, action[2], action[3]
-                )
+                await self._admin_balance(callback.message, context, state, action[2], action[3])
             elif len(action) == 5 and action[:2] == ["admin", "set"]:
                 target = self._admin_scope(action[3], action[4])
                 if context.chat_type != "private" and target.kind != "user":
@@ -1506,9 +1597,7 @@ class TelegramApp:
         current = await self.database.get_settings(context.scope)
         payer_id = await self.sparks.payer(context)
         complimentary = await self.quota.complimentary(context, billed_user_id=payer_id)
-        paid = not complimentary and await self.quota.exhausted(
-            context, billed_user_id=payer_id
-        )
+        paid = not complimentary and await self.quota.exhausted(context, billed_user_id=payer_id)
         if paid and not await self.sparks.can_afford(payer_id):
             await self._notify(message, context, self._topup_copy())
             return
@@ -1841,9 +1930,7 @@ class TelegramApp:
             ):
                 markup = await self._private_reply_keyboard(context)
             if message is not None:
-                last = await self.rich.send(
-                    message, content, reply_markup=markup, reply_to=quoted
-                )
+                last = await self.rich.send(message, content, reply_markup=markup, reply_to=quoted)
             else:
                 last = await self.rich.send_chat(
                     context.chat_id,
@@ -2182,8 +2269,7 @@ class TelegramApp:
         user_id = await self.database.find_user_by_username(candidate)
         if user_id is None:
             raise ValueError(
-                f"I don't know @{candidate} yet. Ask them to message me, "
-                "or use their numeric id."
+                f"I don't know @{candidate} yet. Ask them to message me, or use their numeric id."
             )
         return user_id
 
@@ -2265,9 +2351,7 @@ class TelegramApp:
             rows.append([InlineKeyboardButton(text="Remove", callback_data="admin:ask:remove")])
             rows.append(
                 [
-                    InlineKeyboardButton(
-                        text="Add Sparks by id", callback_data="admin:askbal:add"
-                    ),
+                    InlineKeyboardButton(text="Add Sparks by id", callback_data="admin:askbal:add"),
                     InlineKeyboardButton(
                         text="Subtract Sparks by id", callback_data="admin:askbal:sub"
                     ),
@@ -2333,7 +2417,7 @@ class TelegramApp:
     @staticmethod
     def _settings_keyboard(editable: bool, *, private: bool = False) -> InlineKeyboardMarkup | None:
         if not editable:
-            rows = []
+            rows = [[InlineKeyboardButton(text="Your models", callback_data="settings:models")]]
             if private:
                 rows.append(
                     [InlineKeyboardButton(text="Projects", callback_data="settings:projects")]
@@ -2346,7 +2430,7 @@ class TelegramApp:
                 ]
             )
             return InlineKeyboardMarkup(inline_keyboard=rows)
-        rows = []
+        rows = [[InlineKeyboardButton(text="Your models", callback_data="settings:models")]]
         if private:
             rows.append([InlineKeyboardButton(text="Projects", callback_data="settings:projects")])
         rows.extend(
@@ -2556,6 +2640,7 @@ PRIVACY_URL = "https://docs.skye-bot.com/privacy"
 TERMS_URL = "https://docs.skye-bot.com/terms"
 
 COMMANDS = [
+    BotCommand(command="models", description="Choose your text and image models"),
     BotCommand(command="start", description="Start Skye"),
     BotCommand(command="help", description="Show capabilities"),
     BotCommand(command="account", description="Sparks balance and Telegram Stars"),
@@ -2568,6 +2653,7 @@ COMMANDS = [
 ]
 
 PRIVATE_COMMANDS = [
+    BotCommand(command="models", description="Choose your text and image models"),
     BotCommand(command="start", description="Start Skye"),
     BotCommand(command="help", description="Show capabilities"),
     BotCommand(command="account", description="Sparks balance and Telegram Stars"),

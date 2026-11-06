@@ -19,6 +19,11 @@ from aiogram.types import (
 
 
 class Icon(StrEnum):
+    SKYE = "5395356763551739505"
+    OPENAI = "5435979444705601065"
+    ANTHROPIC = "5436067147937791741"
+    DEEPSEEK = "5436177227949584530"
+    XAI = "5435883104294186097"
     CLOSE = "5220160224299623455"
     EDIT = "5219674923059947621"
     SHIELD = "5219823516043485651"
@@ -51,6 +56,14 @@ class Icon(StrEnum):
     APPS_ADD = "5220155736058800623"
     DELETE = "5217677909296194391"
     USER = "5219716798991084516"
+
+
+MODEL_PROVIDER_ICONS: dict[str, Icon] = {
+    "openai": Icon.OPENAI,
+    "anthropic": Icon.ANTHROPIC,
+    "deepseek": Icon.DEEPSEEK,
+    "x-ai": Icon.XAI,
+}
 
 
 @dataclass(frozen=True, slots=True)
@@ -164,6 +177,10 @@ def _button_icon(
         return Icon.SEARCH
     if action in {"next", "skip"}:
         return None
+    if callback.startswith("pick:"):
+        # Model names are not actions ("Banana" must not match "ban").
+        # Known providers supply their logo explicitly on the button.
+        return None
 
     if callback.startswith("skill:add"):
         return Icon.APPS_ADD
@@ -181,6 +198,8 @@ def _button_icon(
         return Icon.BOOKMARK
     if callback.startswith(("settings:reason",)):
         return Icon.IDEA
+    if callback == "settings:models":
+        return Icon.SKYE
     if callback.startswith(("settings:agents", "settings:agent", "agents:")):
         if callback.startswith("agents:add"):
             return Icon.APPS_ADD

@@ -40,9 +40,11 @@ from .library import MediaLibrary
 from .local_audio import LocalAudio
 from .media_groups import MediaGroupService
 from .memory import MemoryService
+from .model_catalog import TEXT_USD
 from .model_traffic import ModelCallTransport
+from .moderation import ModerationService
 from .ops_config import describe_fields
-from .pricing import PricingService
+from .pricing import ModelPrice, PricingService
 from .runtime import OPENAI_MAX_RETRIES, AgentRuntime
 from .sandbox import SandboxService
 from .skills import SkillService
@@ -112,6 +114,7 @@ async def run() -> None:
     )
     await database.open()
     config = await _effective_settings(database, base)
+    config.require_openrouter()
 
     proxy_url = config.skye_proxy_url
     http_client = httpx.AsyncClient(
@@ -226,6 +229,10 @@ async def run() -> None:
         PricingService(
             sparks_per_rub=config.skye_sparks_per_rub,
             connector_price_rub=config.skye_connector_call_rub,
+            model_prices={
+                model: ModelPrice(*(rate * config.skye_usd_to_rub for rate in rates))
+                for model, rates in TEXT_USD.items()
+            },
         ),
     )
     billing = BillingService(database, sparks, config.telegram_bot_token)
@@ -271,6 +278,9 @@ async def run() -> None:
         sandbox,
         audio=audio,
         files=files,
+        moderation=ModerationService(config, http_client)
+        if config.skye_moderation_enabled
+        else None,
     )
     telegram_projects = TelegramProjectService(database)
     telegram = TelegramApp(
@@ -313,9 +323,7 @@ async def run() -> None:
         scheduler = asyncio.create_task(
             automations.run_loop(telegram.fire_automation, runtime.busy)
         )
-        janitor = (
-            asyncio.create_task(sandbox.run_janitor()) if sandbox is not None else None
-        )
+        janitor = asyncio.create_task(sandbox.run_janitor()) if sandbox is not None else None
         files_janitor = asyncio.create_task(files.run_janitor())
         stop = asyncio.Event()
         loop = asyncio.get_running_loop()
@@ -401,4 +409,3 @@ async def _effective_settings(database: Database, base: Settings) -> Settings:
         fields = ", ".join(".".join(map(str, item["loc"])) for item in error.errors())
         structlog.get_logger().warning("ops_overrides_ignored", fields=fields)
         return base
-

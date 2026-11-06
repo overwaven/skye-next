@@ -190,7 +190,7 @@ FIELD_DESCRIPTIONS: dict[str, str] = {
     "openrouter_api_key": "Selects OpenRouter automatically and fills in its base URL.",
     "skye_provider_api_key": "Key for any OpenAI-compatible endpoint. Wins over the legacy keys.",
     "skye_provider_base_url": "API root only. A pasted /chat/completions suffix is dropped.",
-    "skye_default_model": "Model slug used when a chat has no override.",
+    "skye_default_model": "Model slug used when a user has no personal choice.",
     "skye_default_reasoning": "Reasoning effort requested from the model.",
     "skye_image_model": "Used by generate_image and edit_image.",
     "skye_image_api_key": "Defaults to the provider key when empty.",

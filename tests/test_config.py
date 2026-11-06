@@ -81,11 +81,11 @@ def test_openrouter_key_selects_openrouter_base_url_and_namespaced_models() -> N
     assert loaded.provider_base_url == "https://openrouter.ai/api/v1"
 
 
-def test_openai_key_alone_means_default_base_url() -> None:
+def test_legacy_key_uses_openrouter_by_default() -> None:
     loaded = settings(openrouter_api_key=None)
 
     assert loaded.provider_api_key == "sk-test"
-    assert loaded.provider_base_url is None
+    assert loaded.provider_base_url == "https://openrouter.ai/api/v1"
 
 
 def test_unified_provider_key_wins_over_legacy_keys() -> None:
@@ -170,7 +170,7 @@ def test_fal_media_is_selected_per_capability() -> None:
     assert plain.audio_on_fal is False
 
     # With a key, ``auto`` sends both to fal.
-    auto = settings(skye_fal_key="fal-test")
+    auto = settings(skye_fal_key="fal-test", skye_image_provider="auto", skye_audio_provider="auto")
     assert auto.images_on_fal is True
     assert auto.audio_on_fal is True
 
@@ -204,10 +204,7 @@ def test_fal_media_defaults_are_the_requested_endpoints() -> None:
     assert loaded.skye_fal_image_model == "openai/gpt-image-2.5/flare/text-to-image"
     assert loaded.skye_fal_image_edit_model == "openai/gpt-image-2.5/flare/edit"
     assert loaded.skye_fal_speech_model == "google/gemini-3.8-flash-lite-tts"
-    assert (
-        loaded.skye_fal_transcription_model
-        == "fal-ai/elevenlabs/speech-to-text/scribe-v2"
-    )
+    assert loaded.skye_fal_transcription_model == "fal-ai/elevenlabs/speech-to-text/scribe-v2"
 
 
 def test_sandbox_and_exa_defaults() -> None:
