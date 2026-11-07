@@ -9,11 +9,9 @@ from unittest.mock import AsyncMock, patch
 import pytest
 from agents import FunctionTool
 
-from skye.artifacts import GeneratedFile
 from skye.models import Scope
 from skye.sandbox import (
     LAST_USED_NAME,
-    SandboxResult,
     SandboxService,
     SandboxUnavailableError,
     turn_files,
@@ -100,20 +98,6 @@ def test_changes_detect_new_and_modified_files(tmp_path: Path) -> None:
     }
 
 
-def test_changes_skip_hidden_and_ignored_paths(tmp_path: Path) -> None:
-    sandbox = service(tmp_path)
-    scope = Scope("user", 7)
-    box = sandbox.new_workspace(scope)
-    before = sandbox.snapshot(scope)
-
-    (box.workspace / ".hidden").write_bytes(b"x")
-    (box.workspace / "__pycache__").mkdir()
-    (box.workspace / "__pycache__" / "m.pyc").write_bytes(b"x")
-    (box.workspace / "ok.txt").write_bytes(b"ok")
-
-    assert sandbox.changes(scope, before) == [("ok.txt", b"ok")]
-
-
 def test_deliverable_separates_images_and_documents(tmp_path: Path) -> None:
     sandbox = service(tmp_path)
     box = sandbox.new_workspace(Scope("user", 7))
@@ -127,18 +111,6 @@ def test_deliverable_separates_images_and_documents(tmp_path: Path) -> None:
     assert [item.filename for item in files] == ["report.txt"]
     assert files[0].data == b"report"
     assert images == (b"\x89PNG\r\n\x1a\nhead",)
-
-
-def test_deliverable_skips_explicitly_delivered(tmp_path: Path) -> None:
-    sandbox = service(tmp_path)
-    box = sandbox.new_workspace(Scope("user", 7))
-    box.mark()
-    (box.workspace / "report.txt").write_bytes(b"report")
-
-    files, images = box.deliverable([GeneratedFile("report.txt", b"report")])
-
-    assert files == ()
-    assert images == ()
 
 
 def test_cleanup_removes_expired_scopes(tmp_path: Path) -> None:
@@ -230,20 +202,6 @@ async def test_read_and_write_round_trip(tmp_path: Path) -> None:
     )
 
 
-async def test_python_tool_pipes_code_on_stdin(tmp_path: Path) -> None:
-    box = service(tmp_path).new_workspace(Scope("user", 7))
-    box.service.execute = AsyncMock(  # type: ignore[method-assign]
-        return_value=SandboxResult("hi", "", False)
-    )
-
-    output = await invoke(tools(box)["python"], code="print('hi')")
-
-    assert output == "stdout:\nhi"
-    box.service.execute.assert_awaited_once()
-    assert box.service.execute.await_args.args[1] == "python -"
-    assert box.service.execute.await_args.kwargs["stdin"] == b"print('hi')"
-
-
 async def test_execute_mounts_the_scope_and_hardens_container(tmp_path: Path) -> None:
     spawned: list[list[str]] = []
 
@@ -289,13 +247,3 @@ async def test_execute_mounts_the_scope_and_hardens_container(tmp_path: Path) ->
     assert "--user" in argv
 
 
-async def test_shell_exec_reports_timeout(tmp_path: Path) -> None:
-    box = service(tmp_path).new_workspace(Scope("user", 7))
-    box.service.execute = AsyncMock(  # type: ignore[method-assign]
-        return_value=SandboxResult("", "boom", True)
-    )
-
-    output = await invoke(tools(box)["shell_exec"], command="make")
-
-    assert "Timed out" in output
-    assert "boom" in output

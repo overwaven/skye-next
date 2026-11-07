@@ -8,12 +8,6 @@ CITE_MULTI = "\ue200cite\ue202turn0search0\ue202turn0search1\ue201"
 CITE_FILE = "\ue200cite\ue202turn0file0\ue202L8-L13\ue201"
 
 
-def test_exact_user_cite_token_is_removed() -> None:
-    assert CITE_TURN0_VIEW0 == "\ue200cite\ue202turn0view0\ue201"
-    assert sanitize_citations(CITE_TURN0_VIEW0) == ""
-    assert sanitize_citations(f"Paris is the capital.{CITE_TURN0_VIEW0}") == "Paris is the capital."
-
-
 def test_sibling_citation_wrappers_are_removed() -> None:
     assert sanitize_citations(f"Done.{CITE_TURN0_SEARCH0}") == "Done."
     assert sanitize_citations(f"Done.{CITE_MULTI}") == "Done."

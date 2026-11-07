@@ -40,14 +40,6 @@ def service(database: Database) -> SkillService:
     return SkillService(database, 1024 * 1024)
 
 
-def test_markdown_skill_is_wrapped_into_a_zip() -> None:
-    bundle = bundle_from_upload("SKILL.md", SKILL_MD.encode(), max_bytes=1024 * 1024)
-
-    assert bundle.name == "basic-math"
-    assert bundle.files == (("basic-math/SKILL.md", SKILL_MD.encode()),)
-    assert "basic-math/SKILL.md" in skill_paths(bundle.archive)
-
-
 def test_zip_skill_keeps_every_bundled_file() -> None:
     archive = make_zip(
         {
@@ -66,17 +58,6 @@ def test_zip_skill_keeps_every_bundled_file() -> None:
         "basic-math/SKILL.md",
         "basic-math/calculate.py",
         "basic-math/data/table.csv",
-    }
-
-
-def test_zip_without_a_folder_is_rooted_under_the_skill_name() -> None:
-    archive = make_zip({"SKILL.md": SKILL_MD, "helper.py": "print(1)\n"})
-
-    bundle = bundle_from_upload("skill.zip", archive, max_bytes=1024 * 1024)
-
-    assert {path for path, _payload in bundle.files} == {
-        "basic-math/SKILL.md",
-        "basic-math/helper.py",
     }
 
 

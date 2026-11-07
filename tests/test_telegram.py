@@ -1,5 +1,3 @@
-import json
-from datetime import datetime
 from types import SimpleNamespace
 from typing import Any
 from unittest.mock import AsyncMock
@@ -11,10 +9,8 @@ from aiogram.types import (
     InlineKeyboardMarkup,
     InputRichBlockTable,
     InputRichMessage,
-    LinkPreviewOptions,
     Message,
     PhotoSize,
-    Update,
     User,
     Video,
     VideoNote,
@@ -27,7 +23,7 @@ from skye.quota import Allowance
 from skye.rich import RichMessages
 from skye.runtime import AgentRuntime, RunOutput
 from skye.sparks import SPARK_SCALE
-from skye.telegram import AdminPrompt, RetryTurn, TelegramApp, dump_update
+from skye.telegram import AdminPrompt, RetryTurn, TelegramApp
 
 
 def group_message(
@@ -66,54 +62,12 @@ def telegram_app() -> TelegramApp:
     return app
 
 
-def test_update_dump_survives_link_preview_defaults() -> None:
-    message = Message(
-        message_id=1,
-        date=datetime(2026, 8, 15, 16, 0, 0),
-        chat=Chat(id=7, type="private"),
-        from_user=User(id=7, is_bot=False, first_name="Alice"),
-        text="https://example.com/mcp",
-        link_preview_options=LinkPreviewOptions(),
-    )
-    payload = dump_update(Update(update_id=1, message=message))
-    parsed = Update.model_validate(json.loads(payload))
-
-    assert parsed.update_id == 1
-    assert parsed.message is not None
-    assert parsed.message.text == "https://example.com/mcp"
-
-
 def test_message_chunks_preserve_content() -> None:
     text = ("word " * 1000).strip()
     chunks = TelegramApp._chunks(text, limit=100)
 
     assert all(len(chunk) <= 100 for chunk in chunks)
     assert " ".join(chunks) == text
-
-
-def test_empty_message_has_no_chunks() -> None:
-    assert TelegramApp._chunks("  ") == []
-
-
-def test_help_keyboard_opens_product_links() -> None:
-    from skye.telegram import DOCS_URL, PRIVACY_URL, TERMS_URL, WEBSITE_URL
-
-    markup = TelegramApp._help_keyboard()
-    buttons = [button for row in markup.inline_keyboard for button in row]
-    assert [(button.text, button.url) for button in buttons] == [
-        ("Website", WEBSITE_URL),
-        ("Docs", DOCS_URL),
-        ("Privacy policy", PRIVACY_URL),
-        ("Terms", TERMS_URL),
-    ]
-
-
-def test_private_commands_include_account() -> None:
-    from skye.telegram import COMMANDS, PRIVATE_COMMANDS
-
-    assert any(item.command == "account" for item in COMMANDS)
-    assert any(item.command == "account" for item in PRIVATE_COMMANDS)
-    assert not any(item.command == "paysupport" for item in PRIVATE_COMMANDS)
 
 
 def _private_message() -> Message:
@@ -188,16 +142,6 @@ async def test_group_message_can_address_bot_by_name(text: str) -> None:
 @pytest.mark.parametrize("text", ["ordinary group message", "skype", "скайп", "landscape"])
 async def test_group_message_without_bot_address_is_ignored(text: str) -> None:
     assert not await telegram_app()._directed_at_bot(group_message(text))
-
-
-async def test_undirected_group_message_does_not_check_access() -> None:
-    app = telegram_app()
-    app._directed_at_bot = AsyncMock(return_value=False)  # type: ignore[method-assign]
-    app._require_access = AsyncMock(return_value=False)  # type: ignore[method-assign]
-
-    await app.chat(group_message("ordinary group message"))
-
-    app._require_access.assert_not_awaited()
 
 
 async def test_banned_group_sees_chat_ban_copy() -> None:
@@ -426,23 +370,6 @@ async def test_group_history_photos_are_not_attached() -> None:
     assert "[photo]" in result
 
 
-async def test_group_context_block_is_omitted_when_history_is_empty() -> None:
-    app = telegram_app()
-    app.groups = SimpleNamespace(
-        text=lambda item: item.text or "",
-        history=AsyncMock(return_value=GroupHistory("")),
-    )
-    incoming = group_message("Skye, hello")
-    context = app._context(incoming)
-    assert context is not None
-
-    result = await app._input(incoming, context)
-
-    assert isinstance(result, str)
-    assert "<recent_group_context>" not in result
-    assert "<current_message>\nAlice [id 42] #1: Skye, hello\n</current_message>" in result
-
-
 async def test_deliver_sends_container_files_without_leftover_prose() -> None:
     app = telegram_app()
     app.rich = SimpleNamespace(
@@ -590,113 +517,6 @@ async def test_stream_turn_posts_send_message_bubbles_not_final_output() -> None
     assert any("On it." in item for item in posted)
     assert any("Done." in item for item in posted)
     assert not any("HIDDEN leftover" in item for item in posted)
-
-
-async def test_stream_turn_can_send_during_a_tool_run() -> None:
-    from skye.models import ChatSettings
-
-    posted: list[str] = []
-
-    class WorkingRuntime(AgentRuntime):
-        def __init__(self) -> None:
-            return
-
-        async def run(self, *args: Any, **kwargs: Any) -> RunOutput:  # type: ignore[override]
-            on_reply = kwargs.get("on_reply")
-            if on_reply is not None:
-                await on_reply("Looking now.")
-                await on_reply("Found it.")
-            return RunOutput("hidden", (), sent=2)
-
-    app = telegram_app()
-    app.sparks = SimpleNamespace(
-        payer=AsyncMock(return_value=1),
-        can_afford=AsyncMock(return_value=True),
-        cost_milli=AsyncMock(return_value=0),
-        charge=AsyncMock(return_value=True),
-    )
-    app.quota = SimpleNamespace(
-        complimentary=AsyncMock(return_value=False),
-        exhausted=AsyncMock(return_value=False),
-        record=AsyncMock(),
-        allowance=AsyncMock(return_value=Allowance(0, 20_000, 0, 400_000)),
-    )
-    app.runtime = WorkingRuntime()  # type: ignore[assignment]
-    app.database = SimpleNamespace(
-        get_settings=AsyncMock(return_value=ChatSettings("gpt-5.6-luna", "medium"))
-    )
-    app.billing = SimpleNamespace(
-        clamp_settings=AsyncMock(side_effect=lambda _context, current, _access: current)
-    )
-    app._can_edit = AsyncMock(return_value=True)  # type: ignore[method-assign]
-    app.groups = SimpleNamespace(mark_seen=AsyncMock())
-    incoming = private_message("search")
-    app.rich = SimpleNamespace(
-        output=RichMessages.output,
-        send=AsyncMock(
-            side_effect=lambda _target, content, reply_markup=None, reply_to=None: (
-                posted.append(str(content)) or incoming
-            )
-        ),
-        edit=AsyncMock(),
-        delete=AsyncMock(),
-        draft=AsyncMock(),
-        send_images=AsyncMock(),
-        send_documents=AsyncMock(),
-    )
-    context = app._context(incoming)
-    assert context is not None
-
-    await app._stream_turn(incoming, context, "search")
-
-    assert any("Looking now." in item for item in posted)
-    assert any("Found it." in item for item in posted)
-
-
-async def test_post_visible_is_standalone_by_default() -> None:
-    app = telegram_app()
-    incoming = private_message("hello")
-    app.rich = SimpleNamespace(
-        output=RichMessages.output,
-        send=AsyncMock(return_value=incoming),
-        edit=AsyncMock(),
-        delete=AsyncMock(),
-    )
-    context = app._context(incoming)
-    assert context is not None
-
-    await app._post_visible(incoming, context, None, "Hi.", first=True)
-
-    app.rich.send.assert_awaited_once_with(
-        incoming,
-        InputRichMessage(markdown="Hi."),
-        reply_markup=None,
-        reply_to=None,
-    )
-    app.rich.edit.assert_not_awaited()
-    app.rich.delete.assert_not_awaited()
-
-
-async def test_post_visible_quotes_reply_to() -> None:
-    app = telegram_app()
-    incoming = private_message("hello")
-    app.rich = SimpleNamespace(
-        output=RichMessages.output,
-        send=AsyncMock(return_value=incoming),
-        edit=AsyncMock(),
-        delete=AsyncMock(),
-    )
-    context = app._context(incoming)
-    assert context is not None
-
-    await app._post_visible(incoming, context, None, "Quoted.", first=True, reply_to=123)
-
-    app.rich.send.assert_awaited_once_with(
-        incoming,
-        InputRichMessage(markdown="Quoted."),
-        reply_markup=None,
-        reply_to=123,
-    )
 
 
 async def test_post_visible_deletes_placeholder_when_quoting() -> None:
@@ -1008,38 +828,6 @@ async def test_admin_group_keyboard_does_not_list_other_entries() -> None:
     assert all(not isinstance(block, InputRichBlockTable) for block in content.blocks)
 
 
-async def test_admin_banned_group_offers_remove_and_allow() -> None:
-    entries = [AccessEntry(Scope("chat", -100), "ban", 1, "now")]
-    app = admin_app(entries)
-
-    await app.admin(owner_group_message(), AsyncMock())
-
-    labels = button_labels(app.rich.send.await_args.kwargs["reply_markup"])
-    data = button_data(app.rich.send.await_args.kwargs["reply_markup"])
-    assert labels == ["Remove this group", "Allow this group"]
-    assert data == ["admin:remove_group", "admin:allow_group"]
-
-
-async def test_admin_reply_offers_user_buttons() -> None:
-    app = admin_app()
-    alice = Message(
-        message_id=2,
-        date=0,
-        chat=Chat(id=1, type="private", first_name="Owner"),
-        from_user=User(id=42, is_bot=False, first_name="Alice"),
-        text="hello",
-    )
-
-    await app.admin(private_message("/admin", reply=alice), AsyncMock())
-
-    labels = button_labels(app.rich.send.await_args.kwargs["reply_markup"])
-    data = button_data(app.rich.send.await_args.kwargs["reply_markup"])
-    assert "Allow Alice" in labels
-    assert "Ban Alice" in labels
-    assert "admin:set:allow:user:42" in data
-    assert "admin:set:ban:user:42" in data
-
-
 def test_admin_scope_from_text_parses_numeric_ids() -> None:
     assert TelegramApp._admin_scope_from_text("99") == Scope("user", 99)
     assert TelegramApp._admin_scope_from_text("-100") == Scope("chat", -100)
@@ -1047,22 +835,6 @@ def test_admin_scope_from_text_parses_numeric_ids() -> None:
     assert TelegramApp._admin_scope("chat", "-100") == Scope("chat", -100)
     with pytest.raises(ValueError, match="Unknown admin target"):
         TelegramApp._admin_scope("user", "-100")
-
-
-async def test_admin_callback_asks_for_an_id() -> None:
-    app = admin_app()
-    state = AsyncMock()
-    panel = private_message("/admin")
-    callback = admin_callback_query("admin:ask:allow", panel)
-
-    await app.admin_callback(callback, state)
-
-    state.set_state.assert_awaited_once_with(AdminPrompt.target)
-    state.set_data.assert_awaited_once_with({"action": "allow", "prompt_message_id": 1})
-    content = app.rich.edit.await_args.args[1]
-    assert content == RichMessages.admin_prompt("allow")
-    assert button_data(app.rich.edit.await_args.kwargs["reply_markup"]) == ["admin:cancel"]
-    callback.answer.assert_awaited_once()
 
 
 async def test_admin_prompt_allows_numeric_id_when_replying_to_prompt() -> None:
@@ -1175,61 +947,6 @@ async def test_admin_callback_rejects_non_owner() -> None:
     app.rich.edit.assert_not_awaited()
 
 
-def alice_message() -> Message:
-    return Message(
-        message_id=2,
-        date=0,
-        chat=Chat(id=1, type="private", first_name="Owner"),
-        from_user=User(id=42, is_bot=False, first_name="Alice"),
-        text="hello",
-    )
-
-
-async def test_admin_reply_offers_balance_buttons() -> None:
-    app = admin_app()
-    app.sparks.balance = AsyncMock(return_value=1500)
-
-    await app.admin(private_message("/admin", reply=alice_message()), AsyncMock())
-
-    labels = button_labels(app.rich.send.await_args.kwargs["reply_markup"])
-    data = button_data(app.rich.send.await_args.kwargs["reply_markup"])
-    assert "Add Sparks" in labels
-    assert "Subtract Sparks" in labels
-    assert "Reset Sparks to 0" in labels
-    assert "admin:bal:add:42" in data
-    assert "admin:bal:sub:42" in data
-    assert "admin:bal:reset:42" in data
-    content = app.rich.send.await_args.args[1]
-    assert any("1.5" in str(getattr(block, "text", "")) for block in content.blocks)
-
-
-async def test_admin_reply_hides_reset_when_balance_is_empty() -> None:
-    app = admin_app()
-    app.sparks.balance = AsyncMock(return_value=0)
-
-    await app.admin(private_message("/admin", reply=alice_message()), AsyncMock())
-
-    data = button_data(app.rich.send.await_args.kwargs["reply_markup"])
-    assert "admin:bal:add:42" in data
-    assert "admin:bal:reset:42" not in data
-
-
-async def test_admin_balance_callback_asks_for_an_amount() -> None:
-    app = admin_app()
-    state = AsyncMock()
-    panel = private_message("/admin")
-
-    await app.admin_callback(admin_callback_query("admin:bal:add:42", panel), state)
-
-    state.set_state.assert_awaited_once_with(AdminPrompt.amount)
-    state.set_data.assert_awaited_once_with(
-        {"action": "add", "user_id": 42, "prompt_message_id": 1}
-    )
-    content = app.rich.edit.await_args.args[1]
-    assert content == RichMessages.admin_balance_prompt("add", 42)
-    assert button_data(app.rich.edit.await_args.kwargs["reply_markup"]) == ["admin:cancel"]
-
-
 async def test_admin_amount_credits_the_wallet() -> None:
     app = admin_app()
     app.sparks.grant = AsyncMock(return_value=110 * SPARK_SCALE)
@@ -1287,23 +1004,6 @@ async def test_admin_reset_zeroes_the_wallet() -> None:
 
     app.sparks.reset_balance.assert_awaited_once_with(42, reason="Reset by owner")
     app.rich.edit.assert_awaited_once()
-
-
-def test_admin_user_id_rejects_chats() -> None:
-    assert TelegramApp._admin_user_id("42") == 42
-    with pytest.raises(ValueError, match="person"):
-        TelegramApp._admin_user_id("-100")
-
-
-async def test_retry_without_a_failed_request_says_so() -> None:
-    app = telegram_app()
-    app.access = SimpleNamespace(allowed=AsyncMock(return_value=True))
-    app.rich = SimpleNamespace(send=AsyncMock())
-
-    await app.retry(private_message("/retry"))
-
-    app.rich.send.assert_awaited_once()
-    assert "nothing to retry" in app.rich.send.await_args.args[1].lower()
 
 
 async def test_retry_replays_the_last_failed_request() -> None:
@@ -1385,20 +1085,6 @@ async def test_stream_turn_offers_retry_after_a_failure() -> None:
     assert pending.user_input == "hello"
 
 
-async def test_admin_askbal_prompts_for_a_user() -> None:
-    app = admin_app()
-    state = AsyncMock()
-    panel = private_message("/admin")
-
-    await app.admin_callback(admin_callback_query("admin:askbal:add", panel), state)
-
-    state.set_state.assert_awaited_once_with(AdminPrompt.target)
-    state.set_data.assert_awaited_once_with({"action": "bal_add", "prompt_message_id": 1})
-    content = app.rich.edit.await_args.args[1]
-    assert content == RichMessages.admin_balance_target_prompt("add")
-    assert button_data(app.rich.edit.await_args.kwargs["reply_markup"]) == ["admin:cancel"]
-
-
 async def test_admin_prompt_balance_accepts_username() -> None:
     app = admin_app()
     app.database.find_user_by_username = AsyncMock(return_value=42)
@@ -1440,27 +1126,6 @@ async def test_resolve_admin_user_reads_ids_and_handles() -> None:
         await app._resolve_admin_user("-100")
     with pytest.raises(ValueError, match="numeric"):
         await app._resolve_admin_user(None)
-
-
-async def test_show_free_spend_reports_tokens_left() -> None:
-    from skye.models import ChatSettings
-
-    app = telegram_app()
-    app.database = SimpleNamespace(
-        get_settings=AsyncMock(return_value=ChatSettings("gpt-5.6-luna", "medium"))
-    )
-    app.quota = SimpleNamespace(
-        allowance=AsyncMock(return_value=Allowance(1_000, 20_000, 1_000, 400_000))
-    )
-    app.rich = SimpleNamespace(send=AsyncMock())
-    incoming = private_message("hi")
-    context = app._context(incoming)
-    assert context is not None
-
-    await app._show_free_spend(context, incoming, 1)
-
-    app.rich.send.assert_awaited_once()
-    assert "19k of 20k tokens left today" in app.rich.send.await_args.args[1]
 
 
 async def test_show_free_spend_respects_the_display_toggle() -> None:

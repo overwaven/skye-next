@@ -126,28 +126,6 @@ async def test_transcribe_audio_normalizes_bytearray_for_upload() -> None:
 
 
 @pytest.mark.asyncio
-async def test_replied_voice_can_include_native_audio() -> None:
-    voice = Voice(file_id="voice", file_unique_id="unique-voice", duration=3, file_size=5)
-    transcriptions = Transcriptions()
-    client = SimpleNamespace(audio=SimpleNamespace(transcriptions=transcriptions))
-    service = AttachmentService(
-        settings(native=True), cast(Any, FakeBot({"voice": b"audio"})), audio(client)
-    )
-    content: list[dict[str, Any]] = []
-
-    file_ids = await service.add(message(reply_to_message=message(voice=voice)), content)
-
-    assert file_ids == ()
-    assert content == [
-        {
-            "type": "input_text",
-            "text": "Replied-to audio transcript (voice.ogg):\nHello from the voice note.",
-        },
-        {"type": "input_audio", "input_audio": {"data": "YXVkaW8=", "format": "ogg"}},
-    ]
-
-
-@pytest.mark.asyncio
 @pytest.mark.parametrize("reply", [False, True])
 async def test_transcribes_video_note(reply: bool) -> None:
     video_note = VideoNote(
@@ -261,34 +239,6 @@ async def test_video_sent_as_document_becomes_placeholder_without_upload() -> No
             "text": "Attached video (clip.mp4): the model cannot view this video.",
         }
     ]
-
-
-@pytest.mark.asyncio
-async def test_adds_replied_pdf_as_visual_file_input() -> None:
-    document = Document(
-        file_id="pdf",
-        file_unique_id="unique-pdf",
-        file_name="design.pdf",
-        mime_type="application/pdf",
-        file_size=4,
-    )
-    target = message(reply_to_message=message(document=document))
-    service = AttachmentService(
-        settings(),
-        cast(Any, FakeBot({"pdf": b"%PDF"})),
-        audio(SimpleNamespace()),
-    )
-    content: list[dict[str, Any]] = []
-
-    await service.add(target, content)
-
-    assert content[0] == {"type": "input_text", "text": "Replied-to document (design.pdf):"}
-    assert content[1] == {
-        "type": "input_file",
-        "filename": "design.pdf",
-        "file_data": "data:application/pdf;base64,JVBERg==",
-        "detail": "auto",
-    }
 
 
 @pytest.mark.asyncio

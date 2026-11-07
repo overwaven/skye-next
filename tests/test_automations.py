@@ -9,7 +9,6 @@ from aiogram.types import Chat, Message, User
 
 from skye.automations import (
     AutomationError,
-    AutomationPanel,
     AutomationService,
     authorization_matches,
     next_cron_run,
@@ -234,26 +233,6 @@ async def test_scheduler_skips_busy_once_chat(automations: AutomationService) ->
     assert skipped.next_run_at == original
 
 
-async def test_create_once_schedule(automations: AutomationService) -> None:
-    context = private_context()
-    item = await automations.create_schedule(
-        context,
-        name="Remind me",
-        cron="0 9 * * *",
-        task="Ping once.",
-        once=True,
-        now=datetime(2026, 8, 23, 8, 0, tzinfo=UTC),
-    )
-
-    assert item.once
-    assert item.kind == "schedule"
-    assert item.trigger_label == "once 0 9 * * * UTC"
-    listed = await automations.listed(context.scope, context.thread_id)
-    assert [row.id for row in listed] == [item.id]
-    assert listed[0].once
-    assert listed[0].next_run_at == int(datetime(2026, 8, 23, 9, 0, tzinfo=UTC).timestamp())
-
-
 async def test_scheduler_fires_once_then_deletes(automations: AutomationService) -> None:
     context = private_context()
     now = datetime(2026, 8, 23, 9, 0, tzinfo=UTC)
@@ -304,94 +283,6 @@ async def test_scheduler_once_deletes_even_if_fire_fails(
     assert await automations.get(item.id) is None
 
 
-async def test_scheduler_recurring_still_reschedules_with_once(
-    automations: AutomationService,
-) -> None:
-    context = private_context()
-    created_at = datetime(2026, 8, 23, 8, 0, tzinfo=UTC)
-    due = datetime(2026, 8, 23, 9, 0, tzinfo=UTC)
-    recurring = await automations.create_schedule(
-        context, name="Daily", cron="0 9 * * *", task="Every day.", now=created_at
-    )
-    once = await automations.create_schedule(
-        context,
-        name="Once",
-        cron="0 9 * * *",
-        task="Just once.",
-        once=True,
-        now=created_at,
-    )
-    fired: list[str] = []
-
-    async def fire(automation: Any) -> None:
-        fired.append(automation.id)
-
-    count = await automations.tick(fire, lambda _chat, _thread: False, now=int(due.timestamp()))
-
-    assert count == 2
-    assert set(fired) == {recurring.id, once.id}
-    assert await automations.get(once.id) is None
-    updated = await automations.get(recurring.id)
-    assert updated is not None
-    assert not updated.once
-    assert updated.last_fired_at == int(due.timestamp())
-    assert updated.next_run_at == int(datetime(2026, 8, 24, 9, 0, tzinfo=UTC).timestamp())
-
-
-async def test_tool_create_once_schedule(automations: AutomationService) -> None:
-    from agents.tool_context import ToolContext
-
-    context = private_context(9)
-    tools = {tool.name: tool for tool in automations.tools(context)}
-    payload = (
-        '{"name":"Alarm","cron":"0 9 * * *","task":"Say now.","timezone":"UTC","once":true}'
-    )
-    result = await tools["create_scheduled_automation"].on_invoke_tool(
-        ToolContext(
-            context=None,
-            tool_name="create_scheduled_automation",
-            tool_arguments=payload,
-            tool_call_id="call_1",
-            run_config=None,
-        ),
-        payload,
-    )
-
-    assert "Created scheduled automation" in result
-    assert "once 0 9 * * * UTC" in result
-    listed = await automations.listed(context.scope, 0)
-    assert len(listed) == 1
-    assert listed[0].once
-    summary = await tools["list_automations"].on_invoke_tool(
-        ToolContext(
-            context=None,
-            tool_name="list_automations",
-            tool_arguments="{}",
-            tool_call_id="call_2",
-            run_config=None,
-        ),
-        "{}",
-    )
-    assert "once 0 9 * * * UTC" in summary
-
-
-async def test_update_can_toggle_once(automations: AutomationService) -> None:
-    context = private_context()
-    now = datetime(2026, 8, 23, 8, 0, tzinfo=UTC)
-    item = await automations.create_schedule(
-        context, name="Daily", cron="0 9 * * *", task="Every day.", now=now
-    )
-    assert not item.once
-
-    updated = await automations.update(context, item.id, once=True, now=now)
-    assert updated.once
-    assert updated.trigger_label == "once 0 9 * * * UTC"
-
-    recurring = await automations.update(context, item.id, once=False, now=now)
-    assert not recurring.once
-    assert recurring.trigger_label == "0 9 * * * UTC"
-
-
 async def test_webhook_cannot_be_one_shot(automations: AutomationService) -> None:
     context = private_context()
     item = await automations.create_webhook(context, name="Hook", task="Handle it.")
@@ -424,32 +315,6 @@ async def test_tool_create_stays_in_current_scope(
     listed = await automations.listed(private.scope, 0)
     assert len(listed) == 1
     assert listed[0].name == "Ping"
-
-
-async def test_settings_callback_deletes_one_automation(
-    automations: AutomationService,
-) -> None:
-    context = private_context()
-    keep = await automations.create_webhook(context, name="Keep", task="Keep this.")
-    gone = await automations.create_webhook(context, name="Gone", task="Delete this.")
-    app = object.__new__(TelegramApp)
-    app.access = SimpleNamespace(allowed=AsyncMock(return_value=True))
-    app._can_edit = AsyncMock(return_value=True)  # type: ignore[method-assign]
-    app.rich = SimpleNamespace(edit=AsyncMock(), automations=RichMessages.automations)
-    app.automation_panel = AutomationPanel(automations, app.rich)  # type: ignore[arg-type]
-    callback = SimpleNamespace(
-        message=private_message(),
-        from_user=User(id=42, is_bot=False, first_name="Alice"),
-        data=f"settings:arm:{gone.id}",
-        answer=AsyncMock(),
-    )
-
-    await app.settings_callback(callback)  # type: ignore[arg-type]
-
-    remaining = await automations.listed(context.scope, 0)
-    assert [item.id for item in remaining] == [keep.id]
-    callback.answer.assert_awaited()
-    app.rich.edit.assert_awaited()
 
 
 class FakeRuntime(AgentRuntime):

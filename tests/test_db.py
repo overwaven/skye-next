@@ -6,7 +6,7 @@ import pytest
 
 from skye.access import AccessService
 from skye.db import Database
-from skye.models import AccessEntry, GroupMessage, RequestContext, Scope
+from skye.models import GroupMessage, RequestContext, Scope
 
 
 @pytest.fixture
@@ -44,18 +44,6 @@ async def test_group_allowlist_no_longer_gates_other_groups(database: Database) 
     assert await access.allowed(group)
     assert await access.allowed(other_group)
     assert await access.allowed(private)
-
-
-async def test_list_access_returns_typed_entries(database: Database) -> None:
-    await database.set_access(Scope("user", 42), "allow", created_by=1)
-    await database.set_access(Scope("chat", -100), "ban", created_by=1)
-
-    entries = await database.list_access()
-
-    assert entries == [
-        AccessEntry(Scope("user", 42), "allow", 1, entries[0].created_at),
-        AccessEntry(Scope("chat", -100), "ban", 1, entries[1].created_at),
-    ]
 
 
 async def test_user_directory_resolves_handles(database: Database) -> None:
@@ -284,10 +272,3 @@ async def test_existing_automations_table_gains_once_column(tmp_path: Path) -> N
         assert item.name == "Briefing"
     finally:
         await database.close()
-
-
-async def test_config_overrides_round_trip(database: Database) -> None:
-    await database.set_config_overrides({"SKYE_MAX_TURNS": 25}, [])
-    assert await database.config_overrides() == {"SKYE_MAX_TURNS": 25}
-    await database.set_config_overrides({}, ["SKYE_MAX_TURNS"])
-    assert await database.config_overrides() == {}

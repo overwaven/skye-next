@@ -18,7 +18,7 @@ from skye.audio import AudioService, _unwrap_audio_payload
 from skye.config import Settings
 from skye.custom_agents import AgentComposition
 from skye.exa import ExaService
-from skye.images import ImageService, TurnImages, sniff_mime, turn_sources
+from skye.images import ImageService, TurnImages, turn_sources
 from skye.library import MediaLibrary
 from skye.memory import MemoryService
 from skye.models import (
@@ -35,13 +35,10 @@ from skye.runtime import (
     AgentRuntime,
     ContextLimitError,
     GuardedChatModel,
-    RunEvent,
     RunOutput,
     StreamStartedError,
     TokenRateLimiter,
     TurnDelivery,
-    _tool_specs,
-    describe_activity_event,
     image_tool_call_limit,
     is_transient,
     leftover_reply,
@@ -49,30 +46,6 @@ from skye.runtime import (
     retry_after,
 )
 from skye.sandbox import SandboxResult, SandboxService
-
-
-def test_send_voice_tool_events_are_private_delivery_activity() -> None:
-    called = SimpleNamespace(
-        name="tool_called",
-        item=SimpleNamespace(raw_item={"name": "send_voice", "call_id": "voice_1"}),
-    )
-    finished = SimpleNamespace(
-        name="tool_output",
-        item=SimpleNamespace(raw_item={"name": "send_voice", "call_id": "voice_1"}),
-    )
-
-    assert describe_activity_event(called) == RunEvent(
-        kind="activity",
-        tool_id="voice_1",
-        tool_name="send_voice",
-        tool_status="running",
-    )
-    assert describe_activity_event(finished) == RunEvent(
-        kind="activity",
-        tool_id="voice_1",
-        tool_name="send_voice",
-        tool_status="done",
-    )
 
 
 def config(**overrides: object) -> Settings:
@@ -85,23 +58,6 @@ def config(**overrides: object) -> Settings:
     }
     values.update(overrides)
     return Settings(**values)  # type: ignore[arg-type]
-
-
-def test_agent_toolset_without_optional_services_is_delivery_plus_memory() -> None:
-    memory = MemoryService(cast(Any, None))
-    runtime = AgentRuntime(config(), cast(Any, None), memory, "You are Skye.")
-    agent = runtime._agent(
-        RequestContext(1, "private", 1),
-        ChatSettings("gpt-5.6-luna", "medium"),
-    )
-
-    assert [cast(FunctionTool, tool).name for tool in agent.tools] == [
-        "send_message",
-        "send_voice",
-        "remember",
-        "recall",
-        "forget",
-    ]
 
 
 async def test_sandbox_tools_execute_commands_and_offer_delivery(tmp_path: object) -> None:
@@ -171,41 +127,6 @@ def test_disabled_memory_is_not_injected_or_exposed() -> None:
     assert "send_voice" in names
 
 
-def test_memory_prompt_saves_what_the_user_wants() -> None:
-    memory = MemoryService(cast(Any, None))
-    runtime = AgentRuntime(config(), cast(Any, None), memory, "You are Skye.")
-    agent = runtime._agent(
-        RequestContext(1, "private", 1),
-        ChatSettings("gpt-5.6-luna", "medium"),
-    )
-
-    instructions = cast(str, agent.instructions)
-    assert "anything the user wants saved" in instructions
-    assert "without refusing or filtering" in instructions
-    assert "Never save secrets" not in instructions
-
-
-def test_automation_tools_are_attached_when_managing() -> None:
-    from skye.automations import AutomationService
-
-    memory = MemoryService(cast(Any, None))
-    automations = AutomationService(cast(Any, None), "https://chat.skye-bot.com")
-    runtime = AgentRuntime(
-        config(), cast(Any, None), memory, "You are Skye.", automations=automations
-    )
-    agent = runtime._agent(
-        RequestContext(1, "private", 1),
-        ChatSettings("gpt-5.6-luna", "medium"),
-        manage_automations=True,
-    )
-    names = [
-        cast(FunctionTool, tool).name for tool in agent.tools if isinstance(tool, FunctionTool)
-    ]
-    assert "create_scheduled_automation" in names
-    assert "create_webhook_automation" in names
-    assert "You can create scheduled or webhook automations" in cast(str, agent.instructions)
-
-
 async def test_connectors_attach_through_the_local_mcp_bridge() -> None:
     from skye.connectors import ConnectorSession
 
@@ -236,12 +157,6 @@ async def test_connectors_attach_through_the_local_mcp_bridge() -> None:
     connectors.open.assert_called_once()
     agent = starter.call_args.args[0]
     assert "gmail__send_email" in {getattr(tool, "name", None) for tool in agent.tools}
-
-
-def test_turn_images_collect_finished_pictures_within_limit() -> None:
-    turn = TurnImages(cast(Any, None), 1, [], [b"first", b"second"])
-
-    assert tuple(turn.images[: requested_image_limit("draw a cat")]) == (b"first",)
 
 
 @pytest.mark.parametrize(
@@ -398,12 +313,6 @@ async def test_edit_image_requires_a_name_for_saved_pictures(tmp_path: Any) -> N
     )
 
 
-def test_sniff_mime_detects_common_formats() -> None:
-    assert sniff_mime(b"\x89PNG\r\n\x1a\nrest") == "image/png"
-    assert sniff_mime(b"\xff\xd8\xffrest") == "image/jpeg"
-    assert sniff_mime(b"nope") == "image/png"
-
-
 def test_web_tools_are_attached_only_with_exa_configured() -> None:
     memory = MemoryService(cast(Any, None))
     plain = AgentRuntime(config(), cast(Any, None), memory, "You are Skye.")
@@ -423,26 +332,6 @@ def test_web_tools_are_attached_only_with_exa_configured() -> None:
     assert "web_search" not in plain_names
     assert "web_fetch" not in plain_names
     assert {"web_search", "web_fetch"} <= searching_names
-
-
-async def test_exa_search_formats_results_as_text() -> None:
-    service = ExaService("exa-test")
-    service._post = AsyncMock(  # type: ignore[method-assign]
-        return_value={
-            "results": [
-                {"title": "Example", "url": "https://example.com", "text": "Some facts."},
-                {"title": "", "url": "", "text": "Skipped without a URL."},
-            ]
-        }
-    )
-    search, _fetch = service.tools()
-
-    output = await search.on_invoke_tool(
-        _tool_context("web_search", '{"query":"example"}'), '{"query":"example"}'
-    )
-
-    assert output == "1. Example\nhttps://example.com\nSome facts."
-    service._post.assert_awaited_once()
 
 
 async def test_exa_failure_is_a_readable_answer() -> None:
@@ -579,74 +468,6 @@ async def test_image_service_raises_real_edit_failures() -> None:
     with pytest.raises(BadRequestError):
         await service.edit("add gull", [("attached-0", b"src")])
     assert post.await_count == 1
-
-
-def test_tool_specs_describe_function_tools_for_sizing() -> None:
-    memory = MemoryService(cast(Any, None))
-    runtime = AgentRuntime(config(), cast(Any, None), memory, "You are Skye.")
-    agent = runtime._agent(
-        RequestContext(1, "private", 1),
-        ChatSettings("gpt-5.6-luna", "medium", memory_enabled=False),
-    )
-
-    specs = _tool_specs(agent.tools)
-
-    assert specs
-    assert all("name" in item for item in specs if isinstance(item, dict))
-    assert "send_message" in [item["name"] for item in specs if isinstance(item, dict)]
-
-
-def test_shell_file_note_follows_capabilities() -> None:
-    memory = MemoryService(cast(Any, None))
-    runtime = AgentRuntime(
-        config(),
-        cast(Any, None),
-        memory,
-        "You are Skye.",
-        sandbox=SandboxService("python:3.14-slim", 10, 1024),
-    )
-    with_shell = runtime._agent(
-        RequestContext(1, "private", 1),
-        ChatSettings("gpt-5.6-luna", "medium", memory_enabled=False),
-    )
-    without_shell = runtime._agent(
-        RequestContext(1, "private", 1),
-        ChatSettings("gpt-5.6-luna", "medium", memory_enabled=False, active_agent_id="a1"),
-        composition=AgentComposition(installed_agent("a1", "Researcher", ("web",)), ()),
-    )
-
-    assert "shell_exec" in cast(str, with_shell.instructions)
-    assert "deliver_file" in cast(str, with_shell.instructions)
-    assert "no internet access" in cast(str, with_shell.instructions)
-    assert "shell_exec" not in cast(str, without_shell.instructions)
-
-
-def test_image_delivery_note_follows_capabilities() -> None:
-    memory = MemoryService(cast(Any, None))
-    runtime = AgentRuntime(config(), cast(Any, None), memory, "You are Skye.")
-    with_image = runtime._agent(
-        RequestContext(1, "private", 1),
-        ChatSettings("gpt-5.6-luna", "medium", memory_enabled=False),
-    )
-    without_image = runtime._agent(
-        RequestContext(1, "private", 1),
-        ChatSettings("gpt-5.6-luna", "medium", memory_enabled=False, active_agent_id="a1"),
-        composition=AgentComposition(installed_agent("a1", "Researcher", ("web",)), ()),
-    )
-    image_only = runtime._agent(
-        RequestContext(1, "private", 1),
-        ChatSettings("gpt-5.6-luna", "medium", memory_enabled=False, active_agent_id="a2"),
-        composition=AgentComposition(installed_agent("a2", "Illustrator", ("image",)), ()),
-    )
-
-    note = "Finished pictures are delivered to the user automatically."
-    assert note in cast(str, with_image.instructions)
-    assert "For a singular request, make exactly one call." in cast(
-        str, with_image.instructions
-    )
-    assert "Call generate_image for new pictures" in cast(str, with_image.instructions)
-    assert note not in cast(str, without_image.instructions)
-    assert note in cast(str, image_only.instructions)
 
 
 def installed_agent(
@@ -1006,18 +827,6 @@ async def test_failed_run_rolls_back_session_items() -> None:
     runtime.conversations.database.truncate_session.assert_awaited_once_with("conv_1", 8)
 
 
-def test_model_settings_are_provider_independent() -> None:
-    runtime = runtime_for_run()
-    settings = runtime._model_settings(
-        RequestContext(1, "private", 1),
-        ChatSettings("gpt-5.6-luna", "medium", memory_enabled=False),
-    )
-
-    assert settings.store is False
-    assert settings.max_tokens == 4_000
-    assert set(settings.extra_body or {}) == {"safety_identifier"}
-
-
 async def test_token_rate_limiter_waits_for_the_rolling_budget() -> None:
     now = 0.0
     waits: list[float] = []
@@ -1045,15 +854,6 @@ async def test_chat_model_rejects_a_request_above_the_context_budget() -> None:
         await model._admit("instructions", "x" * 200_000, [])
 
     limiter.acquire.assert_not_awaited()
-
-
-async def test_chat_model_admits_a_small_request_through_the_limiter() -> None:
-    limiter = AsyncMock()
-    model = GuardedChatModel("test-model", AsyncMock(), limiter, 40_000, 50_000, 4_000)
-
-    await model._admit("instructions", "hello", [])
-
-    limiter.acquire.assert_awaited_once()
 
 
 async def test_chat_model_admits_a_large_inline_image() -> None:
@@ -1146,15 +946,6 @@ async def test_chat_model_keeps_large_current_turn_and_drops_old_history() -> No
     limiter.acquire.assert_awaited_once()
 
 
-def test_chat_model_provider_caches_models_by_name() -> None:
-    from skye.runtime import GuardedModelProvider
-
-    provider = GuardedModelProvider(config(), AsyncMock(), AsyncMock())
-
-    assert provider.get_model(None) is provider.get_model(config().skye_default_model)
-    assert provider.get_model("other") is not provider.get_model(None)
-
-
 async def test_chat_model_sends_strict_tools_to_openai_style_providers() -> None:
     body = await _tool_request_body(tool_strict=True)
 
@@ -1165,14 +956,6 @@ async def test_chat_model_can_drop_strict_tools_for_compatible_providers() -> No
     body = await _tool_request_body(tool_strict=False)
 
     assert body["tools"][0]["function"]["strict"] is False
-
-
-async def test_chat_model_provider_passes_tool_strict_to_its_models() -> None:
-    from skye.runtime import GuardedModelProvider
-
-    provider = GuardedModelProvider(config(skye_tool_strict=False), AsyncMock(), AsyncMock())
-
-    assert provider.get_model(None)._tool_strict is False  # type: ignore[attr-defined]
 
 
 async def _tool_request_body(*, tool_strict: bool) -> dict[str, Any]:
@@ -1803,27 +1586,6 @@ def test_unwrap_audio_payload_decodes_gateway_json_envelope() -> None:
     assert _unwrap_audio_payload(b'{"audio": "!!!"}') == b'{"audio": "!!!"}'
 
 
-async def test_send_voice_uses_configured_voice() -> None:
-    create = AsyncMock(return_value=SimpleNamespace(content=b"opus-audio"))
-    client = SimpleNamespace(audio=SimpleNamespace(speech=SimpleNamespace(create=create)))
-
-    async def on_voice(_audio: bytes, _reply_to: int | None = None) -> None:
-        return
-
-    delivery = TurnDelivery(
-        on_voice=on_voice, audio=audio_service(client, voice="Aoede", response_format="opus")
-    )
-
-    assert await delivery.send_voice("Hello", "Calm") == "sent"
-    create.assert_awaited_once_with(
-        model="gpt-4o-mini-tts",
-        voice="Aoede",
-        input="Hello",
-        instructions="Calm",
-        response_format="opus",
-    )
-
-
 async def test_send_voice_retries_without_instructions_when_rejected() -> None:
     rejected = BadRequestError(
         "instructions is not supported",
@@ -1865,56 +1627,6 @@ async def test_send_voice_validates_before_generating_audio() -> None:
     assert await delivery.send_voice("Hello", " ") == "Add voice delivery instructions."
     assert "too long" in await delivery.send_voice("x" * 4097, "Calm")
     create.assert_not_awaited()
-
-
-async def test_run_routes_voice_generation_to_the_audio_service() -> None:
-    audio = cast(Any, SimpleNamespace(name="audio-service"))
-    runtime = runtime_for_run()
-    runtime.audio = audio
-    seen: dict[str, Any] = {}
-    real_delivery = TurnDelivery
-
-    def spy(**kwargs: Any) -> TurnDelivery:
-        seen.update(kwargs)
-        return real_delivery(**kwargs)
-
-    stream = FakeStream(output="hello")
-    with (
-        patch("skye.runtime.TurnDelivery", side_effect=spy),
-        patch("skye.runtime.Runner.run_streamed", return_value=stream),
-    ):
-        await runtime.run(
-            RequestContext(1, "private", 1),
-            ChatSettings("gpt-5.6-luna", "medium", memory_enabled=False),
-            "hello",
-            AsyncMock(),
-        )
-
-    assert seen["audio"] is audio
-
-
-async def test_run_without_audio_service_disables_voice() -> None:
-    runtime = runtime_for_run()
-    seen: dict[str, Any] = {}
-    real_delivery = TurnDelivery
-
-    def spy(**kwargs: Any) -> TurnDelivery:
-        seen.update(kwargs)
-        return real_delivery(**kwargs)
-
-    stream = FakeStream(output="hello")
-    with (
-        patch("skye.runtime.TurnDelivery", side_effect=spy),
-        patch("skye.runtime.Runner.run_streamed", return_value=stream),
-    ):
-        await runtime.run(
-            RequestContext(1, "private", 1),
-            ChatSettings("gpt-5.6-luna", "medium", memory_enabled=False),
-            "hello",
-            AsyncMock(),
-        )
-
-    assert seen["audio"] is None
 
 
 async def test_run_keeps_inner_monologue_off_the_reply_callback() -> None:
@@ -1998,21 +1710,6 @@ async def test_run_replaces_cited_tokens_from_web_search_annotations() -> None:
     assert "turn0view0" not in output.text
 
 
-def test_leftover_reply_strips_citation_tokens() -> None:
-    token = "\ue200cite\ue202turn0view0\ue201"
-    cleaned = leftover_reply(
-        RunOutput(f"Paris is the capital. {token}", ()),
-        awaiting_reply=True,
-    )
-    assert cleaned == "Paris is the capital."
-    assert leftover_reply(RunOutput(token, ()), awaiting_reply=True) == FALLBACK_EMPTY
-    surviving = leftover_reply(
-        RunOutput(f"See https://example.com/report {token}", ()),
-        awaiting_reply=True,
-    )
-    assert surviving == "See https://example.com/report"
-
-
 async def test_send_message_sanitizes_citation_tokens() -> None:
     delivered: list[str] = []
 
@@ -2036,19 +1733,3 @@ async def test_send_message_sanitizes_citation_tokens() -> None:
     assert "turn0view0" not in delivered[0]
 
 
-async def test_hidden_turn_prompt_asks_skye_to_stay_quiet() -> None:
-    memory = MemoryService(cast(Any, None))
-    runtime = AgentRuntime(config(), cast(Any, None), memory, "You are Skye.")
-    visible = runtime._agent(
-        RequestContext(1, "private", 1),
-        ChatSettings("gpt-5.6-luna", "medium", memory_enabled=False),
-        awaiting_reply=True,
-    )
-    hidden = runtime._agent(
-        RequestContext(1, "private", 1),
-        ChatSettings("gpt-5.6-luna", "medium", memory_enabled=False),
-        awaiting_reply=False,
-    )
-    assert "background automation" not in cast(str, visible.instructions)
-    assert "background automation" in cast(str, hidden.instructions)
-    assert "send_message and send_voice are your only ways" in cast(str, visible.instructions)

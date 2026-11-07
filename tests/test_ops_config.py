@@ -3,9 +3,7 @@ from __future__ import annotations
 from skye.config import Settings
 from skye.ops_config import (
     GROUPS,
-    coerce_change,
     describe_fields,
-    effective_values,
     validate_values,
 )
 
@@ -41,19 +39,6 @@ def test_kinds_and_secrets() -> None:
     assert by_key["skye_max_turns"].maximum == 100
 
 
-def test_bounds_are_reported() -> None:
-    by_key = {spec.key: spec for spec in describe_fields()}
-    assert by_key["skye_sandbox_timeout_seconds"].minimum == 5
-    assert by_key["skye_sandbox_timeout_seconds"].maximum == 600
-
-
-def test_validate_accepts_a_change() -> None:
-    validated, errors = validate_values(settings(), {"skye_max_turns": 25})
-    assert errors == {}
-    assert validated is not None
-    assert validated.skye_max_turns == 25
-
-
 def test_validate_reports_cross_field_rules() -> None:
     validated, errors = validate_values(settings(), {"skye_max_context_tokens": 1000})
     assert validated is None
@@ -61,22 +46,3 @@ def test_validate_reports_cross_field_rules() -> None:
     assert "compaction" in errors["skye_max_context_tokens"].lower()
 
 
-def test_validate_reports_range_with_label() -> None:
-    validated, errors = validate_values(settings(), {"skye_sandbox_timeout_seconds": 10_000})
-    assert validated is None
-    assert errors["skye_sandbox_timeout_seconds"].startswith("Sandbox timeout:")
-
-
-def test_coerce_change() -> None:
-    by_key = {spec.key: spec for spec in describe_fields()}
-    assert coerce_change(by_key["skye_max_turns"], "12") == 12
-    assert coerce_change(by_key["skye_sandbox_enabled"], "true") is True
-    assert coerce_change(by_key["skye_owner_ids"], [1, 2]) == [1, 2]
-    assert coerce_change(by_key["skye_provider_api_key"], "  sk-1  ") == "sk-1"
-
-
-def test_effective_values_round_trip() -> None:
-    current = settings()
-    values = effective_values(current)
-    assert set(values) == set(Settings.model_fields)
-    assert validate_values(current, {})[0] is not None

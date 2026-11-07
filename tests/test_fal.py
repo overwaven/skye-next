@@ -9,7 +9,6 @@ import pytest
 from fal_client import FalClientError
 
 from skye.audio import AudioService
-from skye.config import Settings
 from skye.fal import FalClient, FalError
 from skye.images import FalImageService
 
@@ -42,17 +41,6 @@ def wav_bytes() -> bytes:
         for packet in stream.encode():
             container.mux(packet)
     return output.getvalue()
-
-
-async def test_fal_image_generate_returns_the_first_image(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    fal = FakeFal({"images": [{"url": "https://fal.test/out.png"}]})
-    service = FalImageService(cast(Any, fal), "gen/model", IMAGE_EDIT_MODEL, 1024)
-    monkeypatch.setattr("skye.images._download", AsyncMock(return_value=b"png"))
-
-    assert await service.generate("a cat") == b"png"
-    assert fal.runs == [("gen/model", {"prompt": "a cat"})]
 
 
 async def test_fal_image_edit_uploads_sources_and_passes_urls(
@@ -127,42 +115,6 @@ async def test_fal_speak_transcodes_wav_to_mp3(monkeypatch: pytest.MonkeyPatch) 
             },
         )
     ]
-
-
-async def test_fal_speak_omits_empty_style_instructions(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    fal = FakeFal({"audio": {"url": "https://fal.test/out.wav"}})
-    audio = AudioService(
-        transcription_model=TRANSCRIPTION_MODEL,
-        speech_model=SPEECH_MODEL,
-        speech_voice="Aoede",
-        fal=cast(Any, fal),
-    )
-    monkeypatch.setattr("skye.audio._download", AsyncMock(return_value=wav_bytes()))
-
-    await audio.speak("Hello.", "")
-
-    assert fal.runs[0][1] == {
-        "prompt": "Hello.",
-        "voice": "Aoede",
-        "speakers": None,
-        "turns": None,
-    }
-
-
-def test_audio_service_selects_fal_models_from_settings() -> None:
-    config = Settings.model_construct(
-        skye_fal_transcription_model=TRANSCRIPTION_MODEL,
-        skye_fal_speech_model=SPEECH_MODEL,
-        skye_speech_voice="Aoede",
-    )
-
-    service = AudioService.from_settings(config, fal=cast(Any, FakeFal()))
-
-    assert service.transcription_model == TRANSCRIPTION_MODEL
-    assert service.speech_model == SPEECH_MODEL
-    assert service.speech_voice == "Aoede"
 
 
 async def test_fal_client_subscribes_with_the_configured_timeout() -> None:

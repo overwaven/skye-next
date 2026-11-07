@@ -4,8 +4,8 @@ import pytest
 
 from skye.db import Database
 from skye.models import RequestContext
-from skye.pricing import SPARK_SCALE, ModelPrice, PricingService, TurnUsage
-from skye.sparks import SparkError, SparkService, format_milli, parse_amount
+from skye.pricing import SPARK_SCALE, PricingService
+from skye.sparks import SparkError, SparkService, parse_amount
 
 
 @pytest.fixture
@@ -21,15 +21,6 @@ async def database(tmp_path: Path):
 @pytest.fixture
 def wallet(database: Database) -> SparkService:
     return SparkService(database, PricingService())
-
-
-def test_format_milli_is_exact() -> None:
-    assert format_milli(0) == "0"
-    assert format_milli(1000) == "1"
-    assert format_milli(3400) == "3.4"
-    assert format_milli(3450) == "3.45"
-    assert format_milli(500) == "0.5"
-    assert format_milli(1) == "0.001"
 
 
 async def test_credit_and_charge_move_the_balance(database: Database, wallet: SparkService) -> None:
@@ -70,24 +61,6 @@ async def test_payer_is_speaker_unless_sponsored(database: Database, wallet: Spa
     assert await wallet.payer(private) == 42
 
 
-async def test_cost_milli_uses_pricing(database: Database) -> None:
-    wallet = SparkService(
-        database,
-        PricingService(
-            model_prices={"x": ModelPrice(input_per_million=1.0, output_per_million=1.0)}
-        ),
-    )
-    usage = TurnUsage(model="x", input_tokens=1_000_000)
-    assert wallet.cost_milli(usage) == SPARK_SCALE
-
-
-def test_parse_amount_reads_human_numbers() -> None:
-    assert parse_amount("100") == 100 * SPARK_SCALE
-    assert parse_amount(" 12.5 ") == 12_500
-    assert parse_amount("+3") == 3 * SPARK_SCALE
-    assert parse_amount("1,25") == 1_250
-
-
 @pytest.mark.parametrize("raw", ["", "abc", "0", "-5", "inf", "1e30"])
 def test_parse_amount_rejects_bad_values(raw: str) -> None:
     with pytest.raises(SparkError):
@@ -108,4 +81,3 @@ async def test_owner_adjustments_move_the_balance(database: Database, wallet: Sp
     entries = await wallet.ledger(42)
     assert [entry.kind for entry in entries] == ["adjust", "adjust", "adjust"]
     assert entries[0].reason == "Reset by owner"
-

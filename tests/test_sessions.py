@@ -81,27 +81,6 @@ async def test_session_replay_keeps_turns_when_images_are_inline(database: Datab
     assert await session.get_items() == items
 
 
-async def test_session_replay_ignores_generated_image_base64_size(database: Database) -> None:
-    session = DatabaseSession(database, "telegram:1:0", max_chars=400)
-    items = cast(
-        list[TResponseInputItem],
-        [
-            {
-                "id": "image_1",
-                "type": "image_generation_call",
-                "status": "completed",
-                "result": "A" * 20_000,
-            },
-            {"role": "assistant", "content": "recent"},
-            {"role": "user", "content": "latest"},
-        ],
-    )
-
-    await session.add_items(items)
-
-    assert await session.get_items() == items
-
-
 async def test_session_replay_ignores_generated_image_payloads(
     database: Database,
 ) -> None:

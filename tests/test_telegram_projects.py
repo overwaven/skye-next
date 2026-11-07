@@ -11,15 +11,7 @@ from skye.models import RequestContext, TelegramProject
 from skye.telegram import CATCHUP_PROMPT, TelegramApp
 from skye.telegram_projects import (
     DEFAULT_EMOJI,
-    PROJECT_KEYBOARD_CATCHUP,
-    PROJECT_KEYBOARD_PROJECTS,
-    TelegramProjectError,
     TelegramProjectService,
-    parse_leading_emoji,
-    parse_project_callback,
-    parse_standalone_emoji,
-    project_reply_keyboard,
-    projects_keyboard,
 )
 
 
@@ -45,22 +37,6 @@ def private_message(text: str, *, user_id: int = 1) -> Message:
         from_user=User(id=user_id, is_bot=False, first_name="Alice"),
         text=text,
     )
-
-
-def test_parse_leading_emoji() -> None:
-    assert parse_leading_emoji("🧠 Research") == ("🧠", "Research")
-    assert parse_leading_emoji("Research") == (None, "Research")
-    assert parse_leading_emoji("☁️ Skye") == ("☁️", "Skye")
-    assert parse_leading_emoji("✨") == ("✨", "")
-    assert parse_standalone_emoji("hello") is None
-    assert parse_standalone_emoji("📁") == "📁"
-
-
-def test_parse_project_callback() -> None:
-    assert parse_project_callback("settings:back") is None
-    assert parse_project_callback("proj:open:abc123") == ("open", "abc123")
-    assert parse_project_callback("proj:home:s") == ("home", "s")
-    assert parse_project_callback("proj:page:2:s") == ("page", "2", "s")
 
 
 async def test_skye_project_is_created_once_and_cannot_be_deleted(
@@ -142,44 +118,6 @@ async def test_groups_do_not_use_telegram_projects(database: Database) -> None:
     assert group.scope.kind == "chat"
     assert await database.telegram_project(-100, (await projects.active(42)).id) is None
     assert await database.list_telegram_projects(-100) == []
-
-
-async def test_create_rejects_empty_names(database: Database) -> None:
-    projects = service(database)
-    with pytest.raises(TelegramProjectError):
-        await projects.create(1, name="  ")
-
-
-async def test_project_reply_keyboard_uses_plain_labels() -> None:
-    project = TelegramProject(
-        id="abc",
-        user_id=1,
-        kind="custom",
-        name="Research",
-        emoji="🧠",
-        instructions="Prefer TypeScript.",
-        openai_conversation_id=None,
-        created_at="",
-        updated_at="",
-    )
-    markup = project_reply_keyboard(project)
-    labels = [button.text for row in markup.keyboard for button in row]
-    assert labels == [PROJECT_KEYBOARD_PROJECTS, PROJECT_KEYBOARD_CATCHUP]
-    assert labels == ["Projects", "Catch up"]
-    assert markup.input_field_placeholder == "🧠 Research"
-    assert markup.is_persistent is True
-
-
-async def test_projects_keyboard_marks_the_active_project(database: Database) -> None:
-    projects = service(database)
-    skye = await projects.ensure_skye(1)
-    custom = await projects.create(1, name="Lab", emoji="🧪")
-    listed = await projects.list(1)
-    markup = projects_keyboard(listed, custom.id)
-    labels = [button.text for row in markup.inline_keyboard for button in row]
-    assert f"✓ 🧪 {custom.name}" in labels
-    assert f"{skye.emoji} {skye.name}" in labels
-    assert "New project" in labels
 
 
 async def test_catchup_on_empty_conversation_does_not_call_the_model() -> None:

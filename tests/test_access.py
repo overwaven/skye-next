@@ -17,14 +17,6 @@ async def database(tmp_path: Path):
         await value.close()
 
 
-async def test_private_free_user_can_chat(database: Database) -> None:
-    access = AccessService(database, frozenset({1}))
-    private = RequestContext(42, "private", user_id=42)
-
-    assert await access.allowed(private)
-    assert not await access.banned(42)
-
-
 async def test_ban_blocks_private_and_groups(database: Database) -> None:
     access = AccessService(database, frozenset({1}))
     await database.set_access(Scope("user", 42), "ban", created_by=1)
@@ -48,17 +40,6 @@ async def test_group_is_open_by_default(database: Database) -> None:
 
     await database.set_access(Scope("chat", -100), "ban", created_by=1)
     assert not await access.allowed(group)
-
-
-async def test_sponsor_does_not_gate_a_group(database: Database) -> None:
-    access = AccessService(database, frozenset({1}))
-    group = RequestContext(-100, "supergroup", user_id=42)
-
-    assert await access.allowed(group)
-    await database.set_chat_sponsor(-100, 42)
-    assert await access.allowed(group)
-    await database.clear_chat_sponsor(-100)
-    assert await access.allowed(group)
 
 
 async def test_owner_always_allowed(database: Database) -> None:

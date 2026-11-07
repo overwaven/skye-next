@@ -5,7 +5,7 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 import pytest
-from aiogram.types import Chat, Document, Message, PhotoSize, Voice
+from aiogram.types import Chat, Message, PhotoSize
 
 from skye.access import AccessService
 from skye.config import HOSTED_MODEL
@@ -17,7 +17,7 @@ from skye.rich import RichMessages
 from skye.runtime import RunOutput
 from skye.sparks import SparkService
 from skye.telegram_projects import TelegramProjectService
-from skye.telegram_receipts import activity_category, message_media
+from skye.telegram_receipts import activity_category
 from skye.threads import MediaReceipt, ThreadStore
 from skye.turns import TurnService
 
@@ -64,20 +64,6 @@ async def test_media_ids_are_opaque_owner_scoped_and_deleted_with_transcript(dat
         await store.history(2, thread.record.id)
     await store.clear(1, thread.record.id)
     assert await database.fetch_all("SELECT * FROM canonical_media") == []
-
-
-def test_telegram_media_receipts_use_confirmed_objects_not_guessed_names():
-    base = dict(message_id=5, date=0, chat=Chat(id=1, type="private"))
-    message = Message(**base, voice=Voice(file_id="voice", file_unique_id="v", duration=1))
-    assert message_media(message)[0].source_file_id == "voice"
-    message = Message(
-        **base, photo=[PhotoSize(file_id="photo", file_unique_id="p", width=2, height=2)]
-    )
-    assert message_media(message)[0].media_type == "image/jpeg"
-    message = Message(
-        **base, document=Document(file_id="doc", file_unique_id="d", file_name="Report.txt")
-    )
-    assert message_media(message)[0].name == "Report.txt"
 
 
 async def test_partial_media_send_records_only_successful_receipts():

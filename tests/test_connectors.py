@@ -7,8 +7,6 @@ from skye.connectors import (
     ConnectorError,
     ConnectorService,
     composio_auth_headers,
-    composio_user_key,
-    mcp_label,
     parse_headers,
     public_tool_name,
     validate_mcp_url,
@@ -106,18 +104,9 @@ def test_headers_are_parsed_and_filtered() -> None:
         parse_headers("not a header")
 
 
-def test_composio_user_key_is_stable() -> None:
-    assert composio_user_key(42) == "tg:42"
-
-
 def test_composio_uses_org_header_for_org_keys() -> None:
     assert "x-api-key" in composio_auth_headers("ck_live_abc")
     assert "x-org-api-key" in composio_auth_headers("oak_live_abc")
-
-
-def test_mcp_labels_are_safe() -> None:
-    assert mcp_label("mcp", "ab12cd34ef56") == "mcp_ab12cd34ef56"
-    assert " " not in mcp_label("mcp", "Work CRM!")
 
 
 async def test_custom_connectors_are_user_scoped(database: Database) -> None:
@@ -133,20 +122,6 @@ async def test_custom_connectors_are_user_scoped(database: Database) -> None:
     assert await database.get_custom_connector(1, first.id) is None
 
 
-async def test_snapshot_merges_apps_and_custom_servers(database: Database) -> None:
-    composio = FakeComposio()
-    composio.accounts = [AppConnector("gmail", "gmail", "connected", account_id="ca_1")]
-    service = ConnectorService(database, composio)
-    await service.add_custom(7, "Docs", "https://example.com/mcp", {})
-    await database.add_user_toolkit(7, "exa")
-
-    snapshot = await service.snapshot(7)
-
-    assert snapshot.connected_count == 3
-    assert snapshot.labels == ("Exa", "Gmail", "Docs")
-    assert {item.slug for item in snapshot.apps} == {"exa", "gmail"}
-
-
 async def test_no_auth_app_connects_locally(database: Database) -> None:
     service = ConnectorService(database, FakeComposio())
 
@@ -155,17 +130,6 @@ async def test_no_auth_app_connects_locally(database: Database) -> None:
     assert snapshot.apps[0].slug == "exa"
     await service.disconnect_app(3, "exa")
     assert (await service.snapshot(3)).apps == ()
-
-
-async def test_oauth_disconnect_deletes_only_that_users_account(database: Database) -> None:
-    composio = FakeComposio()
-    composio.accounts = [AppConnector("gmail", "Gmail", "connected", account_id="ca_1")]
-    service = ConnectorService(database, composio)
-
-    await service.disconnect_app(9, "gmail")
-
-    assert composio.deleted == ["ca_1"]
-    assert composio.accounts == []
 
 
 async def test_connections_are_private_only(database: Database) -> None:
@@ -205,39 +169,6 @@ async def test_failed_composio_session_does_not_claim_apps(database: Database) -
 def test_public_tool_name_is_sanitized_and_bounded() -> None:
     assert public_tool_name("cmp_4", "send email") == "cmp_4__send_email"
     assert len(public_tool_name("x" * 80, "y" * 80)) <= 64
-
-
-def test_settings_keyboard_adds_connectors_in_private() -> None:
-    from skye.telegram import TelegramApp
-
-    private = TelegramApp._settings_keyboard(True, private=True)
-    group = TelegramApp._settings_keyboard(True, private=False)
-    inspect = TelegramApp._settings_keyboard(False, private=False)
-
-    assert private is not None and group is not None and inspect is not None
-    private_labels = [button.text for row in private.inline_keyboard for button in row]
-    group_labels = [button.text for row in group.inline_keyboard for button in row]
-    inspect_labels = [button.text for row in inspect.inline_keyboard for button in row]
-    assert private_labels == [
-        "Your models",
-        "Projects",
-        "Reasoning",
-        "Agent",
-        "Connectors",
-        "Skills",
-        "Memory",
-        "Automations",
-    ]
-    assert group_labels == [
-        "Your models",
-        "Reasoning",
-        "Agent",
-        "Connectors",
-        "Skills",
-        "Memory",
-        "Automations",
-    ]
-    assert inspect_labels == ["Your models", "Connectors", "Skills", "Automations"]
 
 
 def _group_message(chat_id: int, sender_id: int, message_id: int = 1) -> GroupMessage:

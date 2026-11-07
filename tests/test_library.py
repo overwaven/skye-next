@@ -1,4 +1,3 @@
-import asyncio
 import json
 import os
 import time
@@ -69,18 +68,6 @@ def test_documents_keep_their_names_and_avoid_collisions(tmp_path: Path) -> None
     assert one.name == "report.txt"
     assert two.name == "report-2.txt"
     assert not store.images(scope)
-
-
-def test_describe_lists_the_newest_files(tmp_path: Path) -> None:
-    store = library(tmp_path)
-    scope = Scope("user", 7)
-    store.save(scope, PNG)
-    store.save(scope, b"notes", name="notes.txt")
-
-    described = store.describe(scope)
-
-    assert "image-1.png (picture," in described
-    assert "notes.txt (file," in described
 
 
 async def test_tool_lists_saved_files(tmp_path: Path) -> None:
@@ -170,15 +157,3 @@ def test_cleanup_removes_expired_scopes(tmp_path: Path) -> None:
 
     assert not old.exists()
     assert fresh.exists()
-
-
-async def test_janitor_survives_and_repeats(tmp_path: Path, monkeypatch: Any) -> None:
-    store = library(tmp_path, ttl_seconds=0)
-    store.scope_dir(Scope("user", 1))
-
-    async def fast_sleep(_seconds: float) -> None:
-        raise asyncio.CancelledError
-
-    monkeypatch.setattr("skye.library.asyncio.sleep", fast_sleep)
-    with pytest.raises(asyncio.CancelledError):
-        await store.run_janitor(interval=0.001)

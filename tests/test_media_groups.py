@@ -112,23 +112,6 @@ def text_message() -> Message:
     )
 
 
-async def test_album_photos_become_multiple_vision_inputs() -> None:
-    service = AttachmentService(
-        settings(),
-        cast(Any, DownloadBot({"file-1": b"one", "file-2": b"two", "file-3": b"three"})),
-        audio(SimpleNamespace()),
-    )
-    content: list[dict[str, Any]] = []
-
-    await service.add(text_message(), content, album=[item(1), item(2), item(3)])
-
-    assert [part["type"] for part in content if part["type"] == "input_image"] == [
-        "input_image",
-        "input_image",
-        "input_image",
-    ]
-
-
 async def test_album_photos_use_image_data_urls() -> None:
     service = AttachmentService(
         settings(),
@@ -146,22 +129,6 @@ async def test_album_photos_use_image_data_urls() -> None:
         "data:image/jpeg;base64,dHdv",
     ]
     assert file_ids == ()
-
-
-async def test_album_documents_become_multiple_file_inputs() -> None:
-    service = AttachmentService(
-        settings(),
-        cast(Any, DownloadBot({"file-1": b"one", "file-2": b"two"})),
-        audio(SimpleNamespace()),
-    )
-    content: list[dict[str, Any]] = []
-
-    await service.add(text_message(), content, album=[item(1, "document"), item(2, "document")])
-
-    assert [part["filename"] for part in content if part["type"] == "input_file"] == [
-        "file-1.pdf",
-        "file-2.pdf",
-    ]
 
 
 async def test_album_documents_use_inline_file_data() -> None:

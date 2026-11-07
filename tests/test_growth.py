@@ -7,7 +7,6 @@ from skye.access import AccessService
 from skye.db import Database
 from skye.growth import ACTIVATION_BONUS, GrowthService
 from skye.models import RequestContext
-from skye.pricing import SPARK_SCALE
 from skye.quota import FREE_DAILY, QuotaService
 
 
@@ -46,17 +45,6 @@ async def test_bonus_is_granted_after_activation_and_only_once(database: Databas
         42, "tool", occurred_at=second_day + 86_400
     )
     assert await database.wallet_balance(42) == ACTIVATION_BONUS
-
-
-async def test_activation_bonus_scales_with_sparks(database: Database) -> None:
-    growth = GrowthService(database)
-    day_one = int(datetime(2026, 9, 1, tzinfo=UTC).timestamp())
-    day_two = int(datetime(2026, 9, 2, tzinfo=UTC).timestamp())
-    await growth.completed_task(7, "document", occurred_at=day_one)
-    await growth.completed_task(7, "chat", occurred_at=day_one + 1)
-    await growth.completed_task(7, "chat", occurred_at=day_two)
-
-    assert ACTIVATION_BONUS == 50 * SPARK_SCALE
 
 
 async def test_free_allowance_is_exhausted_after_recording(database: Database) -> None:

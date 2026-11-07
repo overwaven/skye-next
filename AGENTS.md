@@ -130,3 +130,25 @@ uv run pytest
 ```
 
 Line length 100. Ruff selects `E`, `F`, `I`, `UP`, `B`, `SIM`.
+
+## Testing policy
+
+- Never write unit tests after writing code. Tests are not a retrofitted proof
+  of an implementation.
+- Highly prefer E2E tests as the sole testing mechanism. Use them to verify that
+  complex features actually work. Every E2E run must produce a verifiable,
+  repeatable artifact (report, trace or screenshots), not just a green terminal.
+- If a system must be tested in isolation, first write down every way it could
+  fail, then write the code. Keep only tests that protect a real behavioral,
+  security, money or data-integrity failure that E2E cannot reach.
+- Delete tests that assert constants, copy, trivial mapping, mock call order or
+  an implementation detail. A test that cannot fail for a user-visible reason
+  is noise.
+
+## Interface rules
+
+- Cut taglines, helper text and secondary labels. If a screen only makes sense
+  because of them, fix the layout instead of adding explanation.
+- Keep functional status, safety and error copy. Remove decorative copy.
+- Every change should improve UX, DX and AX together. Do not trade one for
+  another or break an existing flow to make a screenshot nicer.

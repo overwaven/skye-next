@@ -27,7 +27,6 @@ from skye.moderation import (
 )
 from skye.runtime import AgentRuntime, RunOutput
 from skye.telegram import TelegramApp
-from skye.ui import MODEL_PROVIDER_ICONS, Icon, decorate_keyboard
 
 
 def config(**extra: Any) -> Settings:
@@ -38,16 +37,6 @@ def config(**extra: Any) -> Settings:
         _env_file=None,
         **extra,
     )
-
-
-def test_requested_defaults() -> None:
-    settings = config()
-    assert settings.skye_default_model == "deepseek/deepseek-v4.1-flash-1017"
-    assert len(settings.skye_text_models) == 8
-    assert len(settings.skye_image_models) == 2
-    assert settings.skye_transcription_model == "mistralai/voxtral-small-transcribe-3-0"
-    assert settings.skye_speech_model == "mistralai/voxtral-mini-tts-3-0"
-    assert not settings.images_on_fal and not settings.audio_on_local
 
 
 async def test_per_user_models_keep_chat_context(tmp_path: Path) -> None:
@@ -273,55 +262,6 @@ async def test_picker_is_bound_to_the_user_not_group_administrators() -> None:
     callback.data = f"pick:2:text:{token}"
     await app.models_callback(callback)
     app.database.set_model_preference.assert_awaited_once_with(2, "text", "openai/gpt-6.1-sol")
-
-
-@pytest.mark.parametrize("kind", ["image", "text"])
-async def test_picker_has_brief_copy_persistent_tabs_and_logo_buttons(kind: str) -> None:
-    app = object.__new__(TelegramApp)
-    app.config = config()
-    app.database = AsyncMock()
-    app.database.model_preferences.return_value = (None, None)
-    app.rich = AsyncMock()
-    app.picker_prices = AsyncMock()
-    models = app.config.skye_image_models if kind == "image" else app.config.skye_text_models
-    app.picker_prices.labels.return_value = ["$1/1M tokens"] * len(models)
-    message = Message.model_validate(
-        {
-            "message_id": 7,
-            "date": 1,
-            "chat": {"id": -100, "type": "supergroup"},
-        }
-    )
-    await app._show_models(message, RequestContext(-100, "supergroup", 2), kind, edit=True)
-
-    call = app.rich.edit.call_args
-    body = call.args[1]
-    assert [block.text for block in body.blocks] == [
-        "Models",
-        "Choose a model for text or images.",
-    ]
-    keyboard = decorate_keyboard(call.kwargs["reply_markup"])
-    rows = keyboard.inline_keyboard
-    assert [button.text for button in rows[0]] == ["Image", "Text"]
-    assert [button.style for button in rows[0]] == (
-        ["success", None] if kind == "image" else [None, "success"]
-    )
-    assert [button.callback_data for button in rows[0]] == [
-        "pick:2:image:open",
-        "pick:2:text:open",
-    ]
-    assert [(button.text, button.icon_custom_emoji_id) for button in rows[1]] == [
-        ("Back", Icon.BACK)
-    ]
-    assert rows[1][0].callback_data == "settings:back"
-    assert len(rows) == 2 + len(models)
-    for model, row in zip(models, rows[2:], strict=True):
-        button = row[0]
-        assert model.name in button.text
-        assert model.tier in button.text
-        assert "$1/1M tokens" in button.text
-        assert button.icon_custom_emoji_id == MODEL_PROVIDER_ICONS.get(model.id.partition("/")[0])
-        assert len(button.callback_data.encode()) <= 64
 
 
 @pytest.mark.parametrize(

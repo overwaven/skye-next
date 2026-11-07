@@ -3,7 +3,7 @@ from typing import Any, cast
 from unittest.mock import AsyncMock
 
 import pytest
-from aiogram.types import InlineKeyboardMarkup, RefundedPayment, SuccessfulPayment
+from aiogram.types import RefundedPayment, SuccessfulPayment
 
 from skye.access import AccessService
 from skye.billing import (
@@ -17,7 +17,7 @@ from skye.db import Database
 from skye.models import RequestContext, Scope
 from skye.pricing import PricingService
 from skye.quota import QuotaService
-from skye.sparks import PACKAGES, SPARK_SCALE, SPARKS_NAME, SparkService
+from skye.sparks import PACKAGES, SPARK_SCALE, SparkService
 
 
 @pytest.fixture
@@ -140,23 +140,6 @@ async def test_refund_reverses_a_topup(database: Database) -> None:
     assert await wallet.balance(42) == 0
 
 
-def test_private_keyboard_offers_packages_and_toggle(database: Database) -> None:
-    keyboard = AccountPanel._private_keyboard(show_spend=True)
-    callbacks = [button.callback_data for row in keyboard.inline_keyboard for button in row]
-    assert "acct:pack:spark_100" in callbacks
-    assert "acct:spend:toggle" in callbacks
-    labels = [button.text for row in keyboard.inline_keyboard for button in row]
-    assert any(label == "Hide spend" for label in labels)
-
-
-def test_group_keyboard_toggles_sponsorship() -> None:
-    off = AccountPanel._group_keyboard(None, 42)
-    assert off.inline_keyboard[0][0].callback_data == "acct:sponsor:on"
-
-    on = AccountPanel._group_keyboard(42, 42)
-    assert on.inline_keyboard[0][0].callback_data == "acct:sponsor:off"
-
-
 class RichStub:
     def __init__(self) -> None:
         self.sent: list[str] = []
@@ -181,37 +164,6 @@ class RichStub:
         return {"kind": "checkout", **kwargs}
 
 
-async def test_spend_toggle_callback_updates_the_scope(database: Database) -> None:
-    rich = RichStub()
-    access = AccessService(database, frozenset({1}))
-    panel = AccountPanel(
-        service(database), sparks(database), access,
-        cast(Any, rich), cast(Any, AsyncMock()), QuotaService(database, access),
-    )
-    context = RequestContext(42, "private", user_id=42)
-    message = cast(Any, object())
-
-    assert (await database.get_settings(Scope("user", 42))).sparks_display is True
-    await panel.handle_callback(message, context, ["spend", "toggle"])
-    assert (await database.get_settings(Scope("user", 42))).sparks_display is False
-
-
-async def test_private_account_shows_the_free_allowance(database: Database) -> None:
-    rich = RichStub()
-    access = AccessService(database, frozenset({1}))
-    panel = AccountPanel(
-        service(database), sparks(database), access,
-        cast(Any, rich), cast(Any, AsyncMock()), QuotaService(database, access),
-    )
-    await database.add_usage(42, 3_000)
-
-    await panel.show(cast(Any, object()), RequestContext(42, "private", user_id=42))
-
-    payload = rich.sent[-1]
-    assert "allowance" in payload
-    assert "3000" in payload
-
-
 async def test_sponsor_callback_sets_and_clears(database: Database) -> None:
     rich = RichStub()
     wallet = sparks(database)
@@ -229,10 +181,3 @@ async def test_sponsor_callback_sets_and_clears(database: Database) -> None:
 
     await panel.handle_callback(message, context, ["sponsor", "off"])
     assert await wallet.sponsor(-100) is None
-
-
-def test_checkout_keyboard_returns_to_account() -> None:
-    keyboard = AccountPanel._checkout_keyboard("https://t.me/invoice")
-    assert isinstance(keyboard, InlineKeyboardMarkup)
-    assert keyboard.inline_keyboard[-1][0].callback_data == "acct:home"
-    assert SPARKS_NAME  # keep the name referenced in copy assertions
