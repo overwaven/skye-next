@@ -2,7 +2,13 @@
 
 from __future__ import annotations
 
+import asyncio
+import hashlib
+import json
+import time
+from collections.abc import Sequence
 from dataclasses import dataclass
+from pathlib import PurePosixPath
 from typing import Literal
 from uuid import uuid4
 
@@ -10,8 +16,9 @@ import aiosqlite
 
 from .db import Database
 from .models import Scope
+from .transcript import legacy_deliveries
 from .web_auth import SCHEMA as AUTH_SCHEMA
-from .web_contracts import ProjectRecord, ThreadRecord, VisibleMessage
+from .web_contracts import FilePart, ProjectRecord, TextPart, ThreadRecord, VisibleMessage
 
 # Applied only by the explicit migration command, not by Database.open().
 SCHEMA = """
@@ -65,6 +72,7 @@ CREATE TABLE IF NOT EXISTS canonical_runs (
     cost_state TEXT NOT NULL DEFAULT 'pending',
     funding TEXT NOT NULL CHECK(funding IN ('free','complimentary','wallet')),
     settings_snapshot TEXT NOT NULL DEFAULT '{}',
+    delivery_state TEXT NOT NULL DEFAULT 'pending',
     created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
     UNIQUE(requester_id, request_key)
 );
@@ -75,6 +83,48 @@ CREATE TABLE IF NOT EXISTS run_settlements (
     cost_milli INTEGER NOT NULL,
     funding TEXT NOT NULL CHECK(funding IN ('free','complimentary','wallet')),
     created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE TABLE IF NOT EXISTS canonical_media (
+    id TEXT PRIMARY KEY,
+    message_id TEXT NOT NULL REFERENCES visible_messages(id) ON DELETE CASCADE,
+    source_file_id TEXT,
+    size INTEGER
+);
+CREATE TABLE IF NOT EXISTS history_imports (
+    thread_id TEXT PRIMARY KEY REFERENCES threads(id),
+    source_last_id INTEGER NOT NULL,
+    source_digest TEXT NOT NULL,
+    source_count INTEGER NOT NULL,
+    imported_count INTEGER NOT NULL,
+    coverage TEXT NOT NULL CHECK(coverage IN ('partial','empty'))
+);
+CREATE TABLE IF NOT EXISTS history_cutovers (
+    thread_id TEXT PRIMARY KEY REFERENCES threads(id),
+    source_last_id INTEGER NOT NULL
+);
+CREATE TABLE IF NOT EXISTS run_activity (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    run_id TEXT NOT NULL REFERENCES canonical_runs(id),
+    category TEXT NOT NULL,
+    status TEXT NOT NULL,
+    created REAL NOT NULL
+);
+CREATE TABLE IF NOT EXISTS run_reconciliation (
+    run_id TEXT PRIMARY KEY REFERENCES canonical_runs(id),
+    reason TEXT NOT NULL,
+    usage_json TEXT,
+    resolved INTEGER NOT NULL DEFAULT 0,
+    evidence TEXT,
+    updated REAL NOT NULL
+);
+CREATE INDEX IF NOT EXISTS run_activity_created ON run_activity(created);
+CREATE INDEX IF NOT EXISTS run_activity_run ON run_activity(run_id,id);
+CREATE INDEX IF NOT EXISTS canonical_runs_payer ON canonical_runs(payer_id,created_at);
+CREATE TABLE IF NOT EXISTS run_provider_receipts (
+    run_id TEXT NOT NULL REFERENCES canonical_runs(id),
+    provider_ref TEXT NOT NULL,
+    usage_json TEXT,
+    PRIMARY KEY(run_id,provider_ref)
 );
 """
 
@@ -87,13 +137,21 @@ class Thread:
     instructions: str
 
 
+@dataclass(frozen=True)
+class MediaReceipt:
+    name: str
+    media_type: str
+    source_file_id: str | None = None
+    size: int | None = None
+
+
 class ThreadStore:
     def __init__(self, database: Database) -> None:
         self.database = database
 
     async def require_schema(self) -> None:
         try:
-            row = await self.database.fetch_one("SELECT version FROM web_schema WHERE version = 1")
+            row = await self.database.fetch_one("SELECT version FROM web_schema WHERE version = 2")
         except aiosqlite.OperationalError:
             raise RuntimeError(
                 "Run the backed-up canonical migration before enabling web"
@@ -108,6 +166,9 @@ class ThreadStore:
         await self.database.execute_script(SCHEMA + AUTH_SCHEMA)
         await self.database._ensure_column(
             "telegram_projects", "revision", "INTEGER NOT NULL DEFAULT 1"
+        )
+        await self.database._ensure_column(
+            "canonical_runs", "delivery_state", "TEXT NOT NULL DEFAULT 'pending'"
         )
         await self.database.conn.commit()
         counts = {"projects": 0, "private": 0, "groups": 0, "automations": 0}
@@ -192,6 +253,13 @@ class ThreadStore:
                 )
                 counts["automations"] += 1
             await conn.execute("INSERT OR IGNORE INTO web_schema VALUES (1)")
+            await conn.execute("""INSERT OR IGNORE INTO history_cutovers
+                SELECT t.id,COALESCE((SELECT MAX(m.id) FROM agent_messages m
+                  WHERE m.session_id=t.session_ref AND (NOT EXISTS
+                    (SELECT 1 FROM canonical_runs r WHERE r.thread_id=t.id)
+                    OR m.created_at < (SELECT MIN(r.created_at) FROM canonical_runs r
+                                       WHERE r.thread_id=t.id))),0) FROM threads t""")
+            await conn.execute("INSERT OR IGNORE INTO web_schema VALUES (2)")
         return counts
 
     @staticmethod
@@ -265,6 +333,11 @@ class ThreadStore:
                (id,scope_kind,scope_id,project_id,title,session_ref,default_instructions)
                VALUES (?,?,?,?,?,?,?)""",
             (thread_id, scope.kind, scope.id, project_id, title, ref, instructions),
+        )
+        await conn.execute(
+            "INSERT INTO history_cutovers VALUES(?,COALESCE("
+            "(SELECT MAX(id) FROM agent_messages WHERE session_id=?),0))",
+            (thread_id, ref),
         )
         return thread_id
 
@@ -377,6 +450,7 @@ class ThreadStore:
         text: str,
         receipt: str,
         run_id: str | None = None,
+        media: Sequence[MediaReceipt] = (),
     ) -> VisibleMessage:
         await self.require(scope, thread_id)
         async with self.database.transaction() as conn:
@@ -396,6 +470,19 @@ class ThreadStore:
                 )
             ).fetchone()
             assert row is not None
+            if not text and not media:
+                raise ValueError("A visible message needs text or a confirmed media receipt")
+            if len(media) > 20:
+                raise ValueError("Too many media references")
+            files = [
+                FilePart(
+                    file_id=uuid4().hex,
+                    name=PurePosixPath(item.name.replace("\\", "/")).name[:200] or "File",
+                    media_type=item.media_type[:128],
+                    availability="unresolved",
+                )
+                for item in media
+            ]
             result = VisibleMessage.model_validate(
                 {
                     "id": uuid4().hex,
@@ -403,7 +490,7 @@ class ThreadStore:
                     "sequence": row[0],
                     "role": role,
                     "origin": origin,
-                    "parts": [{"type": "text", "text": text}],
+                    "parts": [*([TextPart(text=text)] if text else []), *files],
                     "run_id": run_id,
                 }
             )
@@ -412,6 +499,11 @@ class ThreadStore:
                 " VALUES(?,?,?,?,?)",
                 (result.id, thread_id, result.sequence, result.model_dump_json(), receipt),
             )
+            for part, item in zip(files, media, strict=True):
+                await conn.execute(
+                    "INSERT INTO canonical_media VALUES(?,?,?,?)",
+                    (part.file_id, result.id, item.source_file_id, item.size),
+                )
         return result
 
     async def history(
@@ -444,6 +536,19 @@ class ThreadStore:
                 "DELETE FROM agent_messages WHERE session_id=?", (thread.session_ref,)
             )
             await conn.execute("DELETE FROM visible_messages WHERE thread_id=?", (thread_id,))
+            await conn.execute(
+                "DELETE FROM run_activity WHERE run_id IN "
+                "(SELECT id FROM canonical_runs WHERE thread_id=?)",
+                (thread_id,),
+            )
+            await conn.execute("DELETE FROM history_imports WHERE thread_id=?", (thread_id,))
+            await conn.execute(
+                "INSERT INTO history_imports VALUES(?,0,?,0,0,'empty')",
+                (thread_id, hashlib.sha256(b"").hexdigest()),
+            )
+            await conn.execute(
+                "UPDATE history_cutovers SET source_last_id=0 WHERE thread_id=?", (thread_id,)
+            )
             await conn.execute("UPDATE threads SET revision=revision+1 WHERE id=?", (thread_id,))
 
     async def by_session(self, scope: Scope, ref: str) -> Thread:
@@ -478,10 +583,156 @@ class ThreadStore:
         return await self.require(Scope("chat", chat_id), thread_id)
 
     async def interrupt_runs(self) -> int:
-        cursor = await self.database.execute_write(
-            "UPDATE canonical_runs SET state='interrupted',cost_state=CASE WHEN EXISTS "
-            "(SELECT 1 FROM run_settlements WHERE run_id=canonical_runs.id) "
-            "THEN 'settled' ELSE 'unknown' END "
-            "WHERE state IN ('accepted','running','cancelling')"
-        )
+        async with self.database.transaction() as conn:
+            await conn.execute(
+                "INSERT OR IGNORE INTO run_reconciliation(run_id,reason,updated) "
+                "SELECT id,'interrupted',? FROM canonical_runs WHERE state IN "
+                "('accepted','running','cancelling') AND NOT EXISTS "
+                "(SELECT 1 FROM run_settlements WHERE run_id=canonical_runs.id)",
+                (time.time(),),
+            )
+            cursor = await conn.execute(
+                "UPDATE canonical_runs SET state='interrupted',cost_state=CASE WHEN EXISTS "
+                "(SELECT 1 FROM run_settlements WHERE run_id=canonical_runs.id) "
+                "THEN 'settled' WHEN cost_milli IS NOT NULL THEN 'pending' ELSE 'unknown' END "
+                "WHERE state IN ('accepted','running','cancelling')"
+            )
         return cursor.rowcount
+
+    async def backfill_private_history(self) -> dict[str, int]:
+        """Offline, once per thread. Unknown legacy delivery is intentionally omitted."""
+        counts = {"threads": 0, "messages": 0}
+        rows = await self.database.fetch_all(
+            "SELECT id,session_ref FROM threads WHERE scope_kind='user' "
+            "AND id NOT IN (SELECT thread_id FROM history_imports)"
+        )
+        for thread in rows:
+            source = await self.database.fetch_all(
+                "SELECT id,length(message_data) AS size,CASE WHEN length(message_data)<=1048576 "
+                "THEN message_data ELSE NULL END AS data FROM agent_messages "
+                "WHERE session_id=? AND id<=COALESCE((SELECT source_last_id FROM history_cutovers "
+                "WHERE thread_id=?),0) ORDER BY id",
+                (thread["session_ref"], thread["id"]),
+            )
+            items = []
+            digest = hashlib.sha256()
+            for row in source:
+                raw = row["data"]
+                digest.update(f"{row['id']}:{row['size']}:".encode())
+                if raw is not None:
+                    digest.update(str(raw).encode())
+                    try:
+                        value = json.loads(raw)
+                    except TypeError, ValueError:
+                        continue
+                    if isinstance(value, dict):
+                        items.append((int(row["id"]), value))
+            deliveries = legacy_deliveries(items, str(thread["id"]))
+            async with self.database.transaction() as conn:
+                imported = await (
+                    await conn.execute(
+                        "SELECT 1 FROM history_imports WHERE thread_id=?", (thread["id"],)
+                    )
+                ).fetchone()
+                if imported:
+                    continue
+                existing = await (
+                    await conn.execute(
+                        "SELECT id,payload FROM visible_messages "
+                        "WHERE thread_id=? ORDER BY sequence",
+                        (thread["id"],),
+                    )
+                ).fetchall()
+                await conn.execute(
+                    "UPDATE visible_messages SET sequence=-sequence WHERE thread_id=?",
+                    (thread["id"],),
+                )
+                for sequence, delivery in enumerate(deliveries, 1):
+                    message = VisibleMessage(
+                        id=uuid4().hex,
+                        thread_id=thread["id"],
+                        sequence=sequence,
+                        role=delivery.role,
+                        origin="telegram",
+                        parts=delivery.parts,
+                    )
+                    await conn.execute(
+                        "INSERT INTO visible_messages(id,thread_id,sequence,payload,receipt)"
+                        " VALUES(?,?,?,?,?)",
+                        (
+                            message.id,
+                            message.thread_id,
+                            sequence,
+                            message.model_dump_json(),
+                            f"legacy:{message.thread_id}:{delivery.source_id}",
+                        ),
+                    )
+                for sequence, row in enumerate(existing, len(deliveries) + 1):
+                    message = VisibleMessage.model_validate_json(row["payload"]).model_copy(
+                        update={"sequence": sequence}
+                    )
+                    await conn.execute(
+                        "UPDATE visible_messages SET sequence=?,payload=? WHERE id=?",
+                        (sequence, message.model_dump_json(), row["id"]),
+                    )
+                await conn.execute(
+                    "INSERT INTO history_imports VALUES(?,?,?,?,?,?)",
+                    (
+                        thread["id"],
+                        source[-1]["id"] if source else 0,
+                        digest.hexdigest(),
+                        len(source),
+                        len(deliveries),
+                        "partial" if source else "empty",
+                    ),
+                )
+            counts["threads"] += 1
+            counts["messages"] += len(deliveries)
+        return counts
+
+    async def record_activity(self, scope: Scope, run_id: str, category: str, status: str) -> None:
+        if category not in {
+            "web",
+            "image",
+            "voice",
+            "code",
+            "memory",
+            "connector",
+            "automation",
+            "tool",
+        }:
+            return
+        if status not in {"running", "completed", "failed"}:
+            return
+        async with self.database.transaction() as conn:
+            row = await (
+                await conn.execute(
+                    "SELECT 1 FROM canonical_runs r JOIN threads t "
+                    "ON t.id=r.thread_id WHERE r.id=? AND t.scope_kind=? AND t.scope_id=?",
+                    (run_id, scope.kind, scope.id),
+                )
+            ).fetchone()
+            if row is None:
+                raise LookupError("Run not found")
+            now = time.time()
+            await conn.execute(
+                "INSERT INTO run_activity(run_id,category,status,created) VALUES(?,?,?,?)",
+                (run_id, category, status, now),
+            )
+            await conn.execute("DELETE FROM run_activity WHERE created<?", (now - 86400,))
+            await conn.execute(
+                "DELETE FROM run_activity WHERE id IN (SELECT a.id FROM run_activity a "
+                "JOIN canonical_runs r ON r.id=a.run_id JOIN threads t ON t.id=r.thread_id "
+                "WHERE t.scope_kind=? AND t.scope_id=? ORDER BY a.id DESC LIMIT -1 OFFSET 10000)",
+                (scope.kind, scope.id),
+            )
+
+    async def prune_activity(self) -> None:
+        await self.database.execute_write(
+            "DELETE FROM run_activity WHERE created<?", (time.time() - 86400,)
+        )
+
+    async def run_janitor(self) -> None:
+        while True:
+            await self.prune_activity()
+            await asyncio.sleep(60)

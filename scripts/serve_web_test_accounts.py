@@ -48,6 +48,7 @@ async def fixture(output: Path) -> web.Application:
             "project_id": project.id,
             "logout_tokens": [await AuthStore(database).issue(owner) for _ in range(3)],
         }
+    await store.backfill_private_history()
     output.parent.mkdir(parents=True, exist_ok=True)
     with os.fdopen(os.open(output, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600), "w") as file:
         json.dump(accounts, file)

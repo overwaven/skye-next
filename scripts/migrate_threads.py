@@ -28,7 +28,9 @@ async def migrate(path: Path, media: Path, backup: Path) -> dict[str, int]:
     database = Database(path, HOSTED_MODEL, "low")
     await database.open()
     try:
-        counts = await ThreadStore(database).migrate()
+        store = ThreadStore(database)
+        counts = await store.migrate()
+        projected = await store.backfill_private_history()
         row = await database.fetch_one("PRAGMA integrity_check")
         if row is None or row[0] != "ok":
             raise RuntimeError("Database integrity check failed")
@@ -42,10 +44,11 @@ async def migrate(path: Path, media: Path, backup: Path) -> dict[str, int]:
         (backup / "migration.json").write_text(
             json.dumps(
                 {
-                    "version": 1,
+                    "version": 2,
                     "counts": counts,
                     "sha256": checksums,
-                    "legacy_history": "preserved_not_backfilled",
+                    "legacy_history": "allowlisted_partial_projection",
+                    "history_projection": projected,
                 }
             )
             + "\n"

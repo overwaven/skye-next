@@ -346,6 +346,9 @@ async def run() -> None:
         )
         janitor = asyncio.create_task(sandbox.run_janitor()) if sandbox is not None else None
         files_janitor = asyncio.create_task(files.run_janitor())
+        activity_janitor = (
+            asyncio.create_task(threads.run_janitor()) if threads is not None else None
+        )
         stop = asyncio.Event()
         loop = asyncio.get_running_loop()
         for sig in (signal.SIGINT, signal.SIGTERM):
@@ -368,6 +371,8 @@ async def run() -> None:
             if janitor is not None:
                 janitor.cancel()
             files_janitor.cancel()
+            if activity_janitor is not None:
+                activity_janitor.cancel()
             with contextlib.suppress(asyncio.CancelledError):
                 await polling
             with contextlib.suppress(asyncio.CancelledError):
@@ -377,6 +382,9 @@ async def run() -> None:
                     await janitor
             with contextlib.suppress(asyncio.CancelledError):
                 await files_janitor
+            if activity_janitor is not None:
+                with contextlib.suppress(asyncio.CancelledError):
+                    await activity_janitor
     finally:
         if web_runner is not None:
             await web_runner.cleanup()

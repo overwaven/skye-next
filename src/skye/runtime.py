@@ -168,6 +168,7 @@ class RunOutput:
     usage_tokens: int = 0
     sent: int = 0
     usage: TurnUsage = field(default_factory=TurnUsage)
+    usage_complete: bool = True
 
 
 @dataclass(slots=True)
@@ -322,6 +323,8 @@ class RunEvent:
     tool_args: str = ""
     tool_output: str = ""
     image: bytes = b""
+    provider_response_id: str = ""
+    usage_snapshot: TurnUsage | None = None
 
 
 @dataclass(slots=True)
@@ -1015,6 +1018,7 @@ class AgentRuntime:
                             output.usage_tokens,
                             delivery.sent,
                             usage=usage,
+                            usage_complete=output.usage_complete,
                         )
             finally:
                 try:
@@ -1204,7 +1208,7 @@ class AgentRuntime:
                         if on_event is not None:
                             for image in images:
                                 await on_event(RunEvent(kind="image", image=image))
-                        return RunOutput("", images, (), 0)
+                        return RunOutput("", images, (), 0, usage_complete=False)
                     try:
                         await self.conversations.database.truncate_session(
                             conversation_id, checkpoint
@@ -1258,6 +1262,45 @@ class AgentRuntime:
                 if active.cancel.is_set():
                     result.cancel()
                     raise asyncio.CancelledError
+                if on_event is not None and isinstance(event, RawResponsesStreamEvent):
+                    data = event.data
+                    response = getattr(data, "response", None)
+                    item = getattr(data, "item", None)
+                    if getattr(data, "type", "") in {
+                        "response.output_item.added",
+                        "response.output_item.done",
+                        "response.completed",
+                    }:
+                        candidates = (
+                            [item] if item is not None else list(getattr(response, "output", ()))
+                        )
+                        references = set()
+                        for candidate in candidates:
+                            metadata = getattr(candidate, "provider_data", None)
+                            if isinstance(metadata, dict):
+                                ref = metadata.get("response_id")
+                                if isinstance(ref, str):
+                                    references.add(ref)
+                        ref = getattr(response, "id", None)
+                        if isinstance(ref, str) and not ref.startswith("__fake"):
+                            references.add(ref)
+                        snapshot = _usage_from(getattr(response, "usage", None))
+                        if snapshot is not None and snapshot.provider_cost_rub is not None:
+                            snapshot = replace(
+                                snapshot,
+                                provider_cost_rub=(
+                                    snapshot.provider_cost_rub * self.config.skye_usd_to_rub
+                                ),
+                            )
+                        for ref in references:
+                            if re.fullmatch(r"[A-Za-z0-9._:-]{1,200}", ref):
+                                await on_event(
+                                    RunEvent(
+                                        kind="provider_receipt",
+                                        provider_response_id=ref,
+                                        usage_snapshot=snapshot,
+                                    )
+                                )
                 if isinstance(event, RawResponsesStreamEvent) and isinstance(
                     event.data, ResponseTextDeltaEvent
                 ):
@@ -1316,7 +1359,16 @@ class AgentRuntime:
             without_sandbox_links(final.strip()),
             annotations=url_citations(result),
         )
-        return RunOutput(cleaned, images, files, usage, usage=details)
+        return RunOutput(
+            cleaned,
+            images,
+            files,
+            usage,
+            usage=details,
+            # An estimated fallback is useful for legacy UX, not evidence for
+            # final canonical allowance or wallet accounting.
+            usage_complete=details.total_tokens > 0,
+        )
 
     async def _delay(self, active: _ActiveRun, seconds: float) -> None:
         if active.cancel.is_set():

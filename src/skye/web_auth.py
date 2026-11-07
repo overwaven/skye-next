@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import hmac
+import re
 import secrets
 import time
 from dataclasses import dataclass
@@ -64,8 +65,15 @@ def verify_identity(token: str, jwks: dict[str, Any], client_id: str, nonce: str
         nonce={"essential": True, "value": nonce},
     ).validate(decoded.claims)
     claims = decoded.claims
-    subject, user_id = claims["sub"], claims.get("id")
-    if not isinstance(subject, str) or not subject or type(user_id) is not int or user_id <= 0:
+    subject, profile_id = claims["sub"], claims.get("id")
+    if isinstance(profile_id, str) and re.fullmatch(r"[1-9][0-9]{0,18}", profile_id):
+        profile_id = int(profile_id)
+    if (
+        not isinstance(subject, str)
+        or not subject
+        or type(profile_id) is not int
+        or not 0 < profile_id < 2**63
+    ):
         raise ValueError("Missing verified Telegram identity")
     if (
         isinstance(claims["aud"], list)
@@ -73,7 +81,7 @@ def verify_identity(token: str, jwks: dict[str, Any], client_id: str, nonce: str
         and claims.get("azp") != client_id
     ):
         raise ValueError("Invalid authorized party")
-    return Identity(subject, user_id)
+    return Identity(subject, profile_id)
 
 
 @dataclass(frozen=True)
@@ -86,9 +94,13 @@ class Session:
 class OIDCClient:
     """Pinned endpoints; bounded JWKS cache with one refresh on rotation."""
 
-    def __init__(self, client_id: str, secret: str, origin: str) -> None:
+    def __init__(
+        self, client_id: str, secret: str, origin: str, callback_path: str = "/api/v1/auth/callback"
+    ) -> None:
+        if callback_path not in {"/api/v1/auth/callback", "/auth/callback"}:
+            raise ValueError("Unsupported OIDC callback path")
         self.client_id, self.secret = client_id, secret
-        self.callback = f"{origin}/api/v1/auth/callback"
+        self.callback = f"{origin}{callback_path}"
         self._keys: dict[str, Any] = {}
         self._fetched = 0.0
         self._lock = asyncio.Lock()
@@ -130,6 +142,7 @@ class OIDCClient:
                 code=code,
                 code_verifier=verifier,
                 grant_type="authorization_code",
+                client_id=self.client_id,
             )
         token = tokens["id_token"]
         keys = await self._jwks()

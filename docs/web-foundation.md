@@ -154,6 +154,9 @@ than deleting validation to get a green screen. No UserInfo request or refresh i
 Production additionally needs JWKS caching/rotation, durable transactions/sessions,
 account lookup/linking, access rules, CSRF on all mutations and login rate limits.
 
-**Open gate:** no Telegram OIDC credentials were available during implementation.
-Synthetic signed-token tests are not real-provider verification, and Stage 0 is not
-declared fully complete without this operator-assisted check.
+**Live update 2026-11-07:** one real existing account completed the flow through the
+registered `/auth/callback`; signature, issuer, audience, nonce and `profile.id` matched.
+Telegram returned `id` as a canonical decimal string, now accepted only in that strict
+form (floats/booleans/leading zeros fail). A second real account, the two-account
+isolation exit gate and the production cutover remain open. The temporary isolated handler
+and Caddy routes must be removed after verification; see `web-cutover.md`.

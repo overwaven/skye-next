@@ -1,8 +1,9 @@
 # Skye Web Chat — Implementation Plan
 
-Status: Stage 1 complete; Stage 2 canonical/shared-turn core and Stage 3 authenticated
-read-only path implemented behind default-off flags. Stage 0 real-provider OIDC and
-the Stage 2–3 production exit gates remain open. Stages 4–10 are not implemented.
+Status: Stage 1 complete; Stage 2 implementation and Stage 3 authenticated read-only path
+are complete behind default-off flags, with one live OIDC account and a server-copy
+migration/restore rehearsal passed. The second real account, actual cutover and live
+runtime exercise keep the Stage 0/3 exit gates open. Stages 4–10 are not implemented.
 Research and verification date: 2026-11-07. Evidence: `docs/web-cutover.md`.
 
 ## 1. Outcome and product boundaries
@@ -643,18 +644,20 @@ Dependencies: Stage 0 contracts.
 - [x] Migrate existing sessions repeat-safely; validate ownership, counts, instructions, files,
       defaults and group/topic behavior. Preserve backups and legacy lookup during cutover.
 - [x] Extract shared turn/admission/settlement services; use canonical run keys and transport.
-- [ ] Implement per-payer concurrency safety, run-id-based idempotent billing, cancellation,
+- [x] Implement per-payer concurrency safety, run-id-based idempotent billing, cancellation,
       delivery receipts, interrupted-run state and safe activity/visible-message projection.
 - [x] Adapt Telegram projects, thread selection, reset/delete/stop/retry and automation routing
       to shared services. Explicitly decide command semantics where a project now has many threads.
 - [x] Keep metadata-only logs; document actual storage and retention consistently.
 
-Implemented/tested: per-payer/thread serialization, durable deduplication, atomic run-ID
-settlement, cancellation/interruption, default-only instructions, `/threads`, group
-exclusion/reset, retained project history and pinned private automation firing. The
-unchecked item still includes voice/image/file receipts, durable activity projection
-and unknown-cost reconciliation. Legacy history stays intact but is not backfilled;
-the UI says so. Actual-deployment migration/restore and cutover are not performed.
+Implemented/tested: per-payer/thread serialization, durable deduplication, delivery-gated
+atomic run-ID settlement, cancellation/interruption, text/voice/image/document receipts,
+24-hour allowlisted activity, default-only instructions, `/threads`, group exclusion/reset,
+retained project history and pinned private automation firing. Historical backfill is
+cutover-bounded and conservative, with per-thread coverage. Unknown or unaffordable cost
+is held for explicit operator reconciliation rather than charged or marked free.
+**Not yet exercised end-to-end with the live bot under the flags.** Migration was
+rehearsed on server-side copies only; the actual cutover requires downtime and a fresh backup.
 
 **Exit:** Telegram behavior passes regression tests; one project can hold independent threads;
 both adapters can invoke one shared service without duplicate execution or charges.
@@ -670,10 +673,14 @@ Dependencies: Stage 2 ownership model; incorporate Stage 0 OIDC spike.
 - [x] Test wrong claims, replay, stale state, bad callbacks, missing profile ID, unknown key,
       account mismatch, expired/revoked session and cross-user requests.
 
-Local evidence: 568 Python tests, 33 foundation browser tests, plus synthetic two-account
+Evidence: 586 Python tests, 33 foundation browser tests, plus synthetic two-account
 Next.js → Python read-only rendering/axe/logout checks in all three browser engines.
-These are not two real Telegram accounts: real-provider claims, HTTPS cookie flow and
-operator acceptance still block the production exit. Web sending/streams remain absent.
+**One real existing Telegram account passed live OIDC** signature, issuer, audience,
+nonce, canonical decimal-string `id` and existing-account checks through the registered
+`/auth/callback`. A second real account is still required for the production exit.
+Live-data migration/restore passed on private server copies (13 projects, 5 groups,
+28 projected messages, zero repeat imports), not on the running database. Web
+sending/streams remain absent; the temporary OIDC lab must be removed.
 
 **Exit:** two real accounts remain isolated across UI, API, caches, media placeholders and
 streams; existing Telegram resources appear under the correct web account.

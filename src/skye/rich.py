@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from collections.abc import Mapping, Sequence
+from collections.abc import Awaitable, Callable, Mapping, Sequence
 from contextlib import suppress
 from pathlib import PurePosixPath
 from urllib.parse import urlsplit
@@ -136,12 +136,19 @@ class RichMessages:
             if "message is not modified" not in error.message.lower():
                 raise
 
-    async def send_images(self, target: Message, images: Sequence[bytes]) -> None:
+    async def send_images(
+        self,
+        target: Message,
+        images: Sequence[bytes],
+        *,
+        on_delivered: Callable[[Message], Awaitable[None]] | None = None,
+    ) -> None:
         await self.send_images_chat(
             target.chat.id,
             api_thread_id(target) or 0,
             images,
             reply=target,
+            **({"on_delivered": on_delivered} if on_delivered is not None else {}),
         )
 
     async def send_images_chat(
@@ -150,21 +157,32 @@ class RichMessages:
         thread_id: int,
         images: Sequence[bytes],
         reply: Message | None = None,
+        *,
+        on_delivered: Callable[[Message], Awaitable[None]] | None = None,
     ) -> None:
         for index, image in enumerate(images, start=1):
-            await self.bot.send_photo(
+            sent = await self.bot.send_photo(
                 chat_id=chat_id,
                 message_thread_id=thread_id or None,
                 photo=BufferedInputFile(image, filename=f"skye-{index}.png"),
                 reply_parameters=reply_parameters(reply) if reply is not None else None,
             )
+            if on_delivered is not None:
+                await on_delivered(sent)
 
-    async def send_documents(self, target: Message, files: Sequence[GeneratedFile]) -> None:
+    async def send_documents(
+        self,
+        target: Message,
+        files: Sequence[GeneratedFile],
+        *,
+        on_delivered: Callable[[Message], Awaitable[None]] | None = None,
+    ) -> None:
         await self.send_documents_chat(
             target.chat.id,
             api_thread_id(target) or 0,
             files,
             reply=target,
+            **({"on_delivered": on_delivered} if on_delivered is not None else {}),
         )
 
     async def send_documents_chat(
@@ -173,15 +191,19 @@ class RichMessages:
         thread_id: int,
         files: Sequence[GeneratedFile],
         reply: Message | None = None,
+        *,
+        on_delivered: Callable[[Message], Awaitable[None]] | None = None,
     ) -> None:
         for item in files:
-            await self.bot.send_document(
+            sent = await self.bot.send_document(
                 chat_id=chat_id,
                 message_thread_id=thread_id or None,
                 document=BufferedInputFile(item.data, filename=item.filename),
                 reply_parameters=reply_parameters(reply) if reply is not None else None,
                 disable_content_type_detection=True,
             )
+            if on_delivered is not None:
+                await on_delivered(sent)
 
     async def send_voice(
         self,

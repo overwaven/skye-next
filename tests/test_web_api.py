@@ -1,3 +1,4 @@
+import json
 import time
 from pathlib import Path
 from types import SimpleNamespace
@@ -222,6 +223,16 @@ def test_authorization_uses_pkce_and_nonce():
     assert query["scope"] == ["openid profile"]
 
 
+def test_original_registered_callback_is_supported_without_weakening_pkce():
+    url = OIDCClient("client", "secret", "https://skye.test", "/auth/callback").authorization_url(
+        "state", "nonce", "v" * 43
+    )
+    query = parse_qs(urlsplit(url).query)
+    assert query["redirect_uri"] == ["https://skye.test/auth/callback"]
+    assert query["code_challenge_method"] == ["S256"]
+    assert query["nonce"] == ["nonce"]
+
+
 @pytest.mark.parametrize(
     "override",
     [
@@ -231,7 +242,10 @@ def test_authorization_uses_pkce_and_nonce():
         {"exp": 1},
         {"iat": 9999999999},
         {"id": True},
-        {"id": "1"},
+        {"id": "01"},
+        {"id": "1.0"},
+        {"id": "+1"},
+        {"id": 2**63},
         {"id": None},
         {"sub": ""},
         {"aud": ["client", "other"], "azp": "wrong"},
@@ -262,6 +276,44 @@ def test_login_limiter_is_bounded():
     assert len(limiter._buckets) == 2000
 
 
+async def test_run_activity_and_cost_details_are_owner_scoped(database, aiohttp_client):
+    from skye.models import RequestContext
+    from skye.pricing import PricingService
+    from skye.quota import QuotaService
+    from skye.runtime import RunOutput
+    from skye.sparks import SparkService
+    from skye.turns import TurnService
+
+    store = ThreadStore(database)
+    thread = await store.create(1, None, "Run details")
+    access = AccessService(database, frozenset({999}))
+    turns = TurnService(
+        database, access, QuotaService(database, access), SparkService(database, PricingService())
+    )
+
+    async def operation(admission, run_id):
+        await store.record_activity(Scope("user", 1), run_id, "web", "completed")
+        await turns.record_provider_receipt(run_id, "private-provider-reference")
+        return RunOutput("", (), usage_tokens=1)
+
+    output, admission, run_id = await turns.execute(
+        thread, RequestContext(1, "private", 1), "run", operation
+    )
+    await turns.finish_delivery(run_id, complete=True)
+    await turns.settle_delivered(run_id, admission, output)
+    client = await aiohttp_client(application(database))
+    response = await client.get(f"/api/v1/runs/{run_id}", headers=await headers(database, 1))
+    assert response.status == 200
+    body = await response.json()
+    assert body["activities"][0]["category"] == "web"
+    assert body["delivery_state"] == "complete"
+    assert body["run"]["cost_state"] == "settled"
+    assert "private-provider-reference" not in json.dumps(body)
+    assert (
+        await client.get(f"/api/v1/runs/{run_id}", headers=await headers(database, 2))
+    ).status == 404
+
+
 def test_verified_identity_uses_profile_id_and_rejects_wrong_signing_key():
     key = RSAKey.generate_key(2048, parameters={"kid": "current"})
     other = RSAKey.generate_key(2048, parameters={"kid": "current"})
@@ -279,6 +331,8 @@ def test_verified_identity_uses_profile_id_and_rejects_wrong_signing_key():
     assert verify_identity(token, keys, "client", "nonce") == Identity(
         "different-from-telegram-id", 1
     )
+    string_token = jwt.encode({"alg": "RS256", "kid": "current"}, claims | {"id": "1"}, key)
+    assert verify_identity(string_token, keys, "client", "nonce").user_id == 1
     with pytest.raises(JoseError):
         verify_identity(token, {"keys": [other.as_dict(private=False)]}, "client", "nonce")
     unknown = RSAKey.generate_key(2048, parameters={"kid": "unknown"})

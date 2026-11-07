@@ -86,7 +86,7 @@ class ThreadList(Contract):
 class MessagePage(Contract):
     messages: list[VisibleMessage]
     older_than: int | None = Field(default=None, ge=1)
-    legacy_history: Literal["not_backfilled"] = "not_backfilled"
+    legacy_history: Literal["not_backfilled", "partial", "empty"] = "not_backfilled"
 
 
 class SendRequest(Contract):
@@ -132,6 +132,18 @@ class RunEvent(Contract):
     run: RunStatus
 
 
+class ActivityRecord(Contract):
+    sequence: int = Field(ge=1)
+    category: Literal["web", "image", "voice", "code", "memory", "connector", "automation", "tool"]
+    status: Literal["running", "completed", "failed"]
+
+
+class RunDetails(Contract):
+    run: RunStatus
+    delivery_state: Literal["pending", "complete", "partial", "failed"]
+    activities: list[ActivityRecord]
+
+
 class MessageEvent(Contract):
     type: Literal["message.created"] = "message.created"
     message: VisibleMessage
@@ -164,3 +176,4 @@ class WebContract(Contract):
     message_page: MessagePage
     capabilities: Capabilities
     preferences: PreferencesRecord
+    run_details: RunDetails

@@ -15,6 +15,18 @@ services:
       # Local speech models (Whisper and Supertonic) download once into the
       # data volume and survive image rebuilds.
       SKYE_MODELS_DIR: /data/models
+      # Opt-in account web API: private listener only; Caddy and the web
+      # container are the only intended callers.
+      SKYE_CANONICAL_THREADS: "true"
+      SKYE_WEB_ENABLED: "true"
+      SKYE_WEB_HOST: "0.0.0.0"
+      SKYE_WEB_PORT: "8090"
+      SKYE_OIDC_CALLBACK_PATH: "/auth/callback"
+      SKYE_OIDC_CLIENT_ID: "${TELEGRAM_LOGIN_CLIENT_ID}"
+      SKYE_OIDC_CLIENT_SECRET: "${TELEGRAM_LOGIN_CLIENT_SECRET}"
+      SKYE_WEB_INTERNAL_TOKEN: "${SKYE_WEB_INTERNAL_TOKEN}"
+    ports:
+      - "127.0.0.1:8090:8090"
     volumes:
       - skye-data:/data
       # Sandbox control: the bot spawns one Docker container per shell_exec
@@ -41,6 +53,32 @@ services:
       - ${DOCKER_GID:-989}
     security_opt:
       - no-new-privileges:true
+
+  web:
+    build:
+      context: ./web
+    image: skye-web:prod
+    container_name: skye-web
+    environment:
+      SKYE_WEB_ENABLED: "true"
+      SKYE_WEB_ORIGIN: "${SKYE_WEB_ORIGIN:-https://chat.skye-bot.com}"
+      SKYE_WEB_API_ORIGIN: "http://skye:8090"
+      SKYE_WEB_INTERNAL_TOKEN: "${SKYE_WEB_INTERNAL_TOKEN}"
+    ports:
+      - "127.0.0.1:18780:3000"
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "5"
+    labels:
+      com.skye.logs: "true"
+    init: true
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+    depends_on:
+      - skye
 
   # Dozzle is the log viewer: it streams the JSON logs, colour-codes levels and
   # runs SQL against the structured fields. Start it with the logs profile:

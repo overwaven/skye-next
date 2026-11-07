@@ -28,7 +28,7 @@ from .web_auth import (
     OIDCClient,
     Session,
 )
-from .web_contracts import APIError, Capabilities, PreferencesRecord, ProjectRecord
+from .web_contracts import APIError, Capabilities, PreferencesRecord, ProjectRecord, RunDetails
 
 Handler = Callable[[web.Request], Awaitable[web.StreamResponse]]
 TURN_SERVICE = web.AppKey("turn_service", TurnService)
@@ -76,7 +76,10 @@ def create_app(
         raise ValueError("Configure Telegram OIDC credentials before enabling web")
     auth = AuthStore(database)
     provider = oidc or OIDCClient(
-        config.skye_oidc_client_id, config.skye_oidc_client_secret, origin
+        config.skye_oidc_client_id,
+        config.skye_oidc_client_secret,
+        origin,
+        config.skye_oidc_callback_path,
     )
     limiter = LoginLimiter()
 
@@ -98,10 +101,10 @@ def create_app(
             # Top-level OIDC callback navigations are intentionally cross-site.
             if (
                 request.headers.get("Sec-Fetch-Site") == "cross-site"
-                and request.path != "/api/v1/auth/callback"
+                and request.path != config.skye_oidc_callback_path
             ):
                 raise web.HTTPForbidden()
-            public = request.path in {"/api/v1/auth/start", "/api/v1/auth/callback"}
+            public = request.path in {"/api/v1/auth/start", config.skye_oidc_callback_path}
             if public:
                 # Use socket address, never untrusted X-Forwarded-For. Reverse
                 # proxies need a separate per-client limiter at their public edge.
@@ -291,13 +294,54 @@ def create_app(
             )
         except LookupError:
             raise web.HTTPNotFound() from None
+        coverage = await database.fetch_one(
+            "SELECT coverage FROM history_imports WHERE thread_id=?",
+            (request.match_info["thread_id"],),
+        )
         return web.json_response(
             {
                 "messages": [record.model_dump() for record in records],
                 "older_than": records[0].sequence if len(records) == limit else None,
-                "legacy_history": "not_backfilled",
+                "legacy_history": coverage[0] if coverage else "not_backfilled",
             }
         )
+
+    async def run_details(request: web.Request) -> web.Response:
+        row = await database.fetch_one(
+            "SELECT r.* FROM canonical_runs r JOIN threads t "
+            "ON t.id=r.thread_id WHERE r.id=? AND t.scope_kind='user' AND t.scope_id=?",
+            (request.match_info["run_id"], session(request).user_id),
+        )
+        if row is None:
+            raise web.HTTPNotFound()
+        activities = await database.fetch_all(
+            "SELECT id AS sequence,category,status FROM run_activity WHERE run_id=? AND created>=? "
+            "ORDER BY id DESC LIMIT 200",
+            (row["id"], time.time() - 86400),
+        )
+        record = RunDetails.model_validate(
+            {
+                "run": {
+                    "id": row["id"],
+                    "thread_id": row["thread_id"],
+                    "state": row["state"],
+                    "label": {
+                        "accepted": "Queued",
+                        "running": "Working",
+                        "completed": "Finished",
+                        "failed": "Failed",
+                        "cancelling": "Stopping",
+                        "cancelled": "Stopped",
+                        "interrupted": "Interrupted",
+                    }[row["state"]],
+                    "cost_milli": row["cost_milli"],
+                    "cost_state": row["cost_state"],
+                },
+                "delivery_state": row["delivery_state"],
+                "activities": [dict(item) for item in reversed(activities)],
+            }
+        )
+        return web.json_response(record.model_dump())
 
     app = web.Application(middlewares=[security], client_max_size=32_768)
     if turns is not None:
@@ -305,7 +349,7 @@ def create_app(
         # payer/thread admission cannot race between transport adapters.
         app[TURN_SERVICE] = turns
     app.router.add_get("/api/v1/auth/start", start)
-    app.router.add_get("/api/v1/auth/callback", callback)
+    app.router.add_get(config.skye_oidc_callback_path, callback)
     app.router.add_get("/api/v1/session", account)
     app.router.add_post("/api/v1/auth/logout", logout)
     app.router.add_post("/api/v1/auth/logout/all", logout)
@@ -315,4 +359,5 @@ def create_app(
     app.router.add_get("/api/v1/threads", list_threads)
     app.router.add_get("/api/v1/threads/{thread_id}", get_thread)
     app.router.add_get("/api/v1/threads/{thread_id}/messages", history)
+    app.router.add_get("/api/v1/runs/{run_id}", run_details)
     return app

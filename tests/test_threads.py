@@ -153,7 +153,8 @@ async def test_durable_run_idempotency_and_atomic_free_settlement(database: Data
 
     context = RequestContext(1, "private", 1)
     output, admission, run_id = await service.execute(thread, context, "request1", operation)
-    await service.settle(run_id, admission, output)
+    await service.finish_delivery(run_id, complete=True)
+    await service.settle_delivered(run_id, admission, output)
     with pytest.raises(DuplicateRun):
         await service.execute(thread, context, "request1", operation)
     assert calls == 1
@@ -300,7 +301,8 @@ async def test_paid_settlement_is_once_per_run_and_payer_is_serialized(database:
         service.execute(second, context, "two", operation),
     )
     for output, admission, run_id in results:
-        await service.settle(run_id, admission, output)
+        await service.finish_delivery(run_id, complete=True)
+        await service.settle_delivered(run_id, admission, output)
     assert maximum == 1
     assert await database.wallet_balance(1) == 8_000
     ledger = await database.fetch_all("SELECT reference FROM wallet_ledger WHERE kind='spend'")

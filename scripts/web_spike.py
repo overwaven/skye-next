@@ -11,10 +11,13 @@ import argparse
 import asyncio
 import hashlib
 import hmac
+import json
 import os
+import re
 import secrets
 import time
 from dataclasses import dataclass
+from pathlib import Path
 from urllib.parse import urlsplit
 
 import httpx
@@ -48,7 +51,9 @@ def verify_identity(token: str, jwks: dict, client_id: str, nonce: str) -> int:
     ):
         raise ValueError("Invalid authorized party")
     user_id = claims.get("id")
-    if type(user_id) is not int or user_id <= 0:
+    if isinstance(user_id, str) and re.fullmatch(r"[1-9][0-9]{0,18}", user_id):
+        user_id = int(user_id)
+    if type(user_id) is not int or not 0 < user_id < 2**63:
         raise ValueError("Missing verified Telegram profile id")
     return user_id
 
@@ -82,6 +87,17 @@ def create_app(*, fixture: bool = False, origin: str = "http://localhost:3000") 
     sessions: dict[str, float] = {}
     client_id = os.getenv("SKYE_OIDC_CLIENT_ID", "")
     secret = os.getenv("SKYE_OIDC_CLIENT_SECRET", "")
+    callback_path = os.getenv("SKYE_SPIKE_CALLBACK_PATH", "/api/v1/spike/auth/callback")
+    if callback_path not in {
+        "/api/v1/spike/auth/callback",
+        "/api/v1/auth/callback",
+        "/auth/callback",
+    }:
+        raise ValueError("Unsupported registered callback path")
+    known_path = os.getenv("SKYE_SPIKE_KNOWN_USERS_FILE")
+    known_users = set(json.loads(Path(known_path).read_text())) if known_path else None
+    result_path = os.getenv("SKYE_SPIKE_RESULT_FILE")
+    verified_accounts: set[str] = set()
 
     @web.middleware
     async def safety(request: web.Request, handler):
@@ -144,7 +160,7 @@ def create_app(*, fixture: bool = False, origin: str = "http://localhost:3000") 
             secret,
             scope="openid profile",
             code_challenge_method="S256",
-            redirect_uri=f"{origin}/api/v1/spike/auth/callback",
+            redirect_uri=f"{origin}{callback_path}",
         ) as client:
             url, _ = client.create_authorization_url(
                 f"{ISSUER}/auth",
@@ -160,7 +176,7 @@ def create_app(*, fixture: bool = False, origin: str = "http://localhost:3000") 
             secure=secure,
             samesite="Lax",
             max_age=300,
-            path="/api/v1/spike/auth",
+            path="/",
         )
         raise response
 
@@ -176,12 +192,14 @@ def create_app(*, fixture: bool = False, origin: str = "http://localhost:3000") 
             or request.query.get("error")
         ):
             raise web.HTTPBadRequest(text="Login expired or was cancelled. Start login again.")
+        stage = "token_exchange"
+        identity_shape: dict[str, bool] = {}
         try:
             async with AsyncOAuth2Client(
                 client_id,
                 secret,
                 token_endpoint_auth_method="client_secret_basic",
-                redirect_uri=f"{origin}/api/v1/spike/auth/callback",
+                redirect_uri=f"{origin}{callback_path}",
                 timeout=15,
             ) as client:
                 tokens = await client.fetch_token(
@@ -189,30 +207,88 @@ def create_app(*, fixture: bool = False, origin: str = "http://localhost:3000") 
                     code=request.query["code"],
                     code_verifier=transaction.verifier,
                     grant_type="authorization_code",
+                    client_id=client_id,
                 )
+            stage = "signing_keys"
             async with httpx.AsyncClient(timeout=15) as client:
                 keys = await client.get(f"{ISSUER}/.well-known/jwks.json")
                 keys.raise_for_status()
+            stage = "identity_claims"
             verified_id = verify_identity(
                 tokens["id_token"], keys.json(), client_id, transaction.nonce
             )
+            stage = "existing_account_match"
             expected_id = os.getenv("SKYE_SPIKE_EXPECTED_USER_ID")
             if expected_id and verified_id != int(expected_id):
                 raise ValueError("Unexpected account")
-        except Exception:
-            # Never log callback URLs, tokens, credentials or provider error bodies.
-            raise web.HTTPBadRequest(text="Could not verify login. Start login again.") from None
-        response = web.json_response(
-            {
-                "verified": True,
-                "profile_id_present": True,
-                "nonce_verified": True,
-                "expected_account_matched": bool(expected_id),
-                "note": "Lab only: no account was linked or read.",
+            if known_users is not None and verified_id not in known_users:
+                raise ValueError("No matching existing account")
+            claims = jwt.decode(
+                tokens["id_token"], KeySet.import_key_set(keys.json()), algorithms=["RS256"]
+            ).claims
+            subject = claims.get("sub")
+            profile_id = claims.get("id")
+            identity_shape = {
+                "subject_is_string": isinstance(subject, str) and bool(subject),
+                "profile_id_is_canonical": type(profile_id) is int or isinstance(profile_id, str),
+                "subject_differs_from_profile_id": str(subject) != str(profile_id),
             }
+        except Exception as error:
+            # Never log callback URLs, tokens, credentials or provider error bodies.
+            if result_path:
+                diagnostics = {
+                    "verified": False,
+                    "failure_stage": stage,
+                    "error_type": type(error).__name__,
+                }
+                if stage == "identity_claims":
+                    try:
+                        decoded = jwt.decode(
+                            tokens["id_token"],
+                            KeySet.import_key_set(keys.json()),
+                            algorithms=["RS256"],
+                        )
+                        diagnostics.update(
+                            {
+                                "signature_valid": True,
+                                "nonce_present": "nonce" in decoded.claims,
+                                "nonce_matches": decoded.claims.get("nonce") == transaction.nonce,
+                                "profile_id_is_integer": type(decoded.claims.get("id")) is int,
+                                "profile_id_present": "id" in decoded.claims,
+                                "profile_id_type": type(decoded.claims.get("id")).__name__,
+                                "subject_is_string": isinstance(decoded.claims.get("sub"), str),
+                            }
+                        )
+                    except Exception:
+                        diagnostics["signature_valid"] = False
+                with os.fdopen(
+                    os.open(result_path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600), "w"
+                ) as file:
+                    json.dump(diagnostics, file)
+            raise web.HTTPBadRequest(text="Could not verify login. Start login again.") from None
+        result = {
+            "verified": True,
+            "profile_id_present": True,
+            **identity_shape,
+            "nonce_verified": True,
+            "expected_account_matched": bool(expected_id),
+            "existing_account_matched": known_users is not None,
+            "note": "Lab only: no conversation, wallet or resources were loaded or changed.",
+        }
+        verified_accounts.add(
+            hmac.new(secret.encode(), str(verified_id).encode(), "sha256").hexdigest()
         )
+        if result_path:
+            path = Path(result_path)
+            with os.fdopen(
+                os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600), "w"
+            ) as file:
+                json.dump(result | {"distinct_accounts": len(verified_accounts)}, file)
+        response = web.json_response(result)
         issue_session(response)
-        response.del_cookie("skye_spike_login", path="/api/v1/spike/auth")
+        response.del_cookie(
+            "skye_spike_login", path="/", secure=secure, httponly=True, samesite="Lax"
+        )
         return response
 
     async def events(request: web.Request) -> web.StreamResponse:
@@ -242,7 +318,7 @@ def create_app(*, fixture: bool = False, origin: str = "http://localhost:3000") 
     app = web.Application(middlewares=[safety], client_max_size=4096)
     app.router.add_post("/api/v1/spike/session", fixture_session)
     app.router.add_get("/api/v1/spike/auth/start", start)
-    app.router.add_get("/api/v1/spike/auth/callback", callback)
+    app.router.add_get(callback_path, callback)
     app.router.add_get("/api/v1/spike/events", events)
     return app
 

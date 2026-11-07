@@ -9,6 +9,8 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
+import math
+import re
 from collections import defaultdict
 from collections.abc import Awaitable, Callable
 from dataclasses import asdict, dataclass
@@ -20,7 +22,8 @@ import structlog
 
 from .access import AccessService
 from .db import Database
-from .models import ChatSettings, RequestContext
+from .models import ChatSettings, RequestContext, Scope
+from .pricing import TurnUsage
 from .quota import AllowanceError, QuotaService
 from .runtime import RunOutput
 from .sparks import SparkService
@@ -50,8 +53,30 @@ class TurnService:
         self._payer_locks: defaultdict[int, asyncio.Lock] = defaultdict(asyncio.Lock)
         self._thread_locks: defaultdict[str, asyncio.Lock] = defaultdict(asyncio.Lock)
         self._tasks: dict[str, asyncio.Task[object]] = {}
+        self._thread_tasks: dict[str, asyncio.Task[object]] = {}
 
     async def execute(
+        self,
+        thread: Thread,
+        context: RequestContext,
+        request_key: str,
+        operation: Callable[[Admission, str], Awaitable[RunOutput]],
+        *,
+        settings: ChatSettings | None = None,
+    ) -> tuple[RunOutput, Admission, str]:
+        if thread.scope != context.scope:
+            raise PermissionError("This conversation is unavailable")
+        if thread.record.id in self._thread_tasks:
+            raise BusyTurn("This thread already has an active request")
+        task = asyncio.current_task()
+        assert task is not None
+        self._thread_tasks[thread.record.id] = task
+        try:
+            return await self._execute(thread, context, request_key, operation, settings=settings)
+        finally:
+            self._thread_tasks.pop(thread.record.id, None)
+
+    async def _execute(
         self,
         thread: Thread,
         context: RequestContext,
@@ -69,14 +94,31 @@ class TurnService:
             raise BusyTurn("This thread already has an active request")
         payer = await self.sparks.payer(context)
         async with lock, self._payer_locks[payer]:
+            key = hashlib.sha256(request_key.encode()).hexdigest()
+            previous = await self.database.fetch_one(
+                "SELECT id FROM canonical_runs WHERE requester_id=? AND request_key=?",
+                (context.user_id, key),
+            )
+            if previous:
+                raise DuplicateRun(str(previous[0]))
+            await self.retry_known_settlements(payer)
             complimentary = await self.quota.complimentary(context, billed_user_id=payer)
+            pending = await self.database.fetch_one(
+                "SELECT 1 FROM run_reconciliation q JOIN canonical_runs r ON r.id=q.run_id "
+                "WHERE r.payer_id=? AND q.resolved=0 AND r.delivery_state!='pending' LIMIT 1",
+                (payer,),
+            )
+            if pending and not complimentary:
+                raise AllowanceError(
+                    "A previous request needs billing reconciliation. "
+                    "No new request was started; contact the operator."
+                )
             paid = not complimentary and await self.quota.exhausted(context, billed_user_id=payer)
             if paid and not await self.sparks.can_afford(payer):
                 raise AllowanceError("Your allowance is used and your Sparks balance is empty")
             admission = Admission(payer, paid, complimentary)
             run_id = uuid4().hex
             # Hash adapter keys so no accidental message body is retained as metadata.
-            key = hashlib.sha256(request_key.encode()).hexdigest()
             async with self.database.transaction() as conn:
                 previous = await (
                     await conn.execute(
@@ -105,13 +147,21 @@ class TurnService:
             self._tasks[run_id] = task
             try:
                 output = await operation(admission, run_id)
-                await self.settle(run_id, admission, output)
+                await self.queue_reconciliation(
+                    run_id,
+                    "awaiting_settlement" if output.usage_complete else "usage_unknown",
+                    output,
+                )
+                # Do not charge before confirmed delivery. The adapter finishes
+                # delivery and then calls settle_delivered with the same output.
                 await self._state(run_id, "completed")
                 return output, admission, run_id
             except asyncio.CancelledError:
+                await self.queue_reconciliation(run_id, "interrupted")
                 await self._state(run_id, "cancelled")
                 raise
             except BaseException:
+                await self.queue_reconciliation(run_id, "execution_failed")
                 await self._state(run_id, "failed")
                 raise
             finally:
@@ -130,11 +180,51 @@ class TurnService:
         task.cancel()
         return True
 
+    async def cancel_thread(self, scope: Scope, thread_id: str) -> bool:
+        row = await self.database.fetch_one(
+            "SELECT 1 FROM threads WHERE id=? AND scope_kind=? AND scope_id=?",
+            (thread_id, scope.kind, scope.id),
+        )
+        if row is None:
+            raise LookupError("Thread not found")
+        task = self._thread_tasks.get(thread_id)
+        if task is None:
+            return False
+        task.cancel()
+        return True
+
+    async def finish_delivery(self, run_id: str, *, complete: bool) -> None:
+        await self.database.execute_write(
+            "UPDATE canonical_runs SET delivery_state=CASE "
+            "WHEN ? THEN 'complete' WHEN EXISTS(SELECT 1 FROM visible_messages m "
+            "WHERE m.thread_id=canonical_runs.thread_id AND json_extract(m.payload,'$.run_id')="
+            "canonical_runs.id AND json_extract(m.payload,'$.role')='assistant') "
+            "THEN 'partial' ELSE 'failed' END WHERE id=?",
+            (complete, run_id),
+        )
+
+    async def settle_delivered(self, run_id: str, admission: Admission, output: RunOutput) -> None:
+        """Charge only after the adapter has confirmed its delivery boundary."""
+        row = await self.database.fetch_one(
+            "SELECT delivery_state FROM canonical_runs WHERE id=?", (run_id,)
+        )
+        if row is None:
+            raise LookupError("Run not found")
+        if row["delivery_state"] == "pending":
+            raise ValueError("Delivery is not confirmed yet")
+        if not output.usage_complete:
+            return
+        try:
+            await self.settle(run_id, admission, output)
+        except AllowanceError:
+            await self.queue_reconciliation(run_id, "insufficient_funds", output)
+
     async def _state(self, run_id: str, state: str) -> None:
         await self.database.execute_write(
             "UPDATE canonical_runs SET state=?, cost_state=CASE WHEN EXISTS "
             "(SELECT 1 FROM run_settlements WHERE run_id=canonical_runs.id) THEN 'settled' "
-            "WHEN ?='completed' THEN cost_state ELSE 'unknown' END WHERE id=?",
+            "WHEN ?='completed' THEN cost_state WHEN cost_milli IS NOT NULL THEN 'pending' "
+            "ELSE 'unknown' END WHERE id=?",
             (state, state, run_id),
         )
 
@@ -154,11 +244,23 @@ class TurnService:
                 return
             run = await (
                 await conn.execute(
-                    "SELECT payer_id,funding FROM canonical_runs WHERE id=?", (run_id,)
+                    "SELECT payer_id,funding,cost_milli FROM canonical_runs WHERE id=?", (run_id,)
                 )
             ).fetchone()
             if run is None or run[0] != admission.payer_id or run[1] != funding:
                 raise ValueError("Settlement payer does not match the run")
+            delivery = await (
+                await conn.execute(
+                    "SELECT delivery_state FROM canonical_runs WHERE id=?", (run_id,)
+                )
+            ).fetchone()
+            if delivery is None or delivery[0] == "pending":
+                raise ValueError("Wait for delivery confirmation before settlement")
+            if not output.usage_complete:
+                raise ValueError("Incomplete usage requires explicit reconciliation")
+            if run[2] is not None:
+                charged_cost = int(run[2])
+                cost = charged_cost if admission.paid else 0
             if admission.paid and cost > 0:
                 cursor = await conn.execute(
                     "UPDATE wallets SET balance_milli=balance_milli-? WHERE user_id=? "
@@ -213,6 +315,10 @@ class TurnService:
                 "UPDATE canonical_runs SET cost_milli=?,cost_state='settled' WHERE id=?",
                 (charged_cost, run_id),
             )
+            await conn.execute(
+                "UPDATE run_reconciliation SET resolved=1,updated=? WHERE run_id=?",
+                (datetime.now(UTC).timestamp(), run_id),
+            )
         structlog.get_logger().info(
             "turn_settled",
             kind="billing",
@@ -223,4 +329,164 @@ class TurnService:
             tokens=output.usage_tokens,
             model=usage.model,
             images=usage.images,
+        )
+
+    async def queue_reconciliation(
+        self, run_id: str, reason: str, output: RunOutput | None = None
+    ) -> None:
+        if reason not in {
+            "awaiting_settlement",
+            "usage_unknown",
+            "insufficient_funds",
+            "execution_failed",
+            "interrupted",
+        }:
+            raise ValueError("Invalid reconciliation reason")
+        usage = (
+            json.dumps(
+                {
+                    "usage": asdict(output.usage),
+                    "tokens": output.usage_tokens,
+                    "complete": output.usage_complete,
+                }
+            )
+            if output is not None
+            else None
+        )
+        async with self.database.transaction() as conn:
+            await conn.execute(
+                """INSERT INTO run_reconciliation
+                (run_id,reason,usage_json,updated) SELECT ?,?,?,?
+                WHERE NOT EXISTS (SELECT 1 FROM run_settlements WHERE run_id=?)
+                ON CONFLICT(run_id) DO UPDATE SET reason=excluded.reason,
+                usage_json=COALESCE(excluded.usage_json,run_reconciliation.usage_json),
+                updated=excluded.updated WHERE run_reconciliation.resolved=0""",
+                (run_id, reason, usage, datetime.now(UTC).timestamp(), run_id),
+            )
+            if output is not None:
+                row = await (
+                    await conn.execute("SELECT funding FROM canonical_runs WHERE id=?", (run_id,))
+                ).fetchone()
+                if row is None:
+                    raise LookupError("Run not found")
+                quoted = (
+                    self.sparks.cost_milli(
+                        output.usage, provider_cost_rub=output.usage.provider_cost_rub
+                    )
+                    if row[0] == "wallet"
+                    else 0
+                )
+                await conn.execute(
+                    "UPDATE canonical_runs SET cost_milli=?,cost_state=? WHERE id=? "
+                    "AND NOT EXISTS (SELECT 1 FROM run_settlements WHERE run_id=?)",
+                    (
+                        quoted if output.usage_complete else None,
+                        "pending" if output.usage_complete else "unknown",
+                        run_id,
+                        run_id,
+                    ),
+                )
+
+    async def retry_known_settlements(self, payer_id: int) -> None:
+        rows = await self.database.fetch_all(
+            "SELECT q.run_id,q.usage_json,r.funding,r.delivery_state FROM run_reconciliation q "
+            "JOIN canonical_runs r ON r.id=q.run_id WHERE r.payer_id=? AND q.resolved=0 "
+            "AND q.usage_json IS NOT NULL AND r.delivery_state!='pending' "
+            "ORDER BY r.created_at,r.id",
+            (payer_id,),
+        )
+        for row in rows:
+            data = json.loads(row["usage_json"])
+            if not data["complete"]:
+                continue
+            output = RunOutput(
+                "", (), usage_tokens=data["tokens"], usage=TurnUsage(**data["usage"])
+            )
+            try:
+                await self.settle(
+                    row["run_id"],
+                    Admission(
+                        payer_id, row["funding"] == "wallet", row["funding"] == "complimentary"
+                    ),
+                    output,
+                )
+            except AllowanceError:
+                return
+
+    async def reconcile(
+        self, run_id: str, usage: TurnUsage, *, tokens: int, cost_milli: int, evidence: str
+    ) -> None:
+        """Operator-only explicit evidence. Never query a provider or infer unknown usage."""
+        if (
+            type(tokens) is not int
+            or tokens < 0
+            or type(cost_milli) is not int
+            or not 0 <= cost_milli <= 10**12
+            or re.fullmatch(r"[A-Za-z0-9._:/-]{1,200}", evidence) is None
+        ):
+            raise ValueError(
+                "Use nonnegative integer totals and an opaque provider evidence reference"
+            )
+        if any(
+            type(value) is not int or value < 0
+            for value in (
+                usage.input_tokens,
+                usage.output_tokens,
+                usage.cached_tokens,
+                usage.reasoning_tokens,
+                usage.images,
+                usage.connector_calls,
+            )
+        ):
+            raise ValueError("Invalid usage breakdown")
+        if usage.provider_cost_rub is not None and (
+            not math.isfinite(usage.provider_cost_rub) or usage.provider_cost_rub < 0
+        ):
+            raise ValueError("Invalid provider cost")
+        if tokens != usage.total_tokens or usage.cached_tokens > usage.input_tokens:
+            raise ValueError("Usage totals must match the supplied breakdown")
+        row = await self.database.fetch_one(
+            "SELECT r.payer_id,r.funding,q.resolved,q.evidence FROM canonical_runs r "
+            "JOIN run_reconciliation q ON q.run_id=r.id WHERE r.id=?",
+            (run_id,),
+        )
+        if row is None:
+            raise LookupError("Reconciliation item not found")
+        if row["resolved"]:
+            if row["evidence"] != evidence:
+                raise ValueError("Already resolved; do not rewrite settled accounting")
+            return
+        funding = row["funding"]
+        output = RunOutput("", (), usage_tokens=tokens, usage=usage)
+        async with self.database.transaction() as conn:
+            await conn.execute(
+                "UPDATE run_reconciliation SET evidence=?,usage_json=?,updated=? "
+                "WHERE run_id=? AND resolved=0",
+                (
+                    evidence,
+                    json.dumps({"usage": asdict(usage), "tokens": tokens, "complete": True}),
+                    datetime.now(UTC).timestamp(),
+                    run_id,
+                ),
+            )
+            await conn.execute(
+                "UPDATE canonical_runs SET cost_milli=?,cost_state='pending' WHERE id=?",
+                (cost_milli if funding == "wallet" else 0, run_id),
+            )
+        await self.settle(
+            run_id,
+            Admission(row["payer_id"], funding == "wallet", funding == "complimentary"),
+            output,
+        )
+
+    async def record_provider_receipt(
+        self, run_id: str, reference: str, usage: TurnUsage | None = None
+    ) -> None:
+        if re.fullmatch(r"[A-Za-z0-9._:-]{1,200}", reference) is None:
+            return
+        await self.database.execute_write(
+            "INSERT INTO run_provider_receipts VALUES(?,?,?) "
+            "ON CONFLICT(run_id,provider_ref) DO UPDATE SET "
+            "usage_json=COALESCE(excluded.usage_json,run_provider_receipts.usage_json)",
+            (run_id, reference, json.dumps(asdict(usage)) if usage is not None else None),
         )

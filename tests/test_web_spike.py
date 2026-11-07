@@ -43,7 +43,10 @@ def test_oidc_links_profile_id_not_subject():
         {"aud": "other"},
         {"nonce": "other"},
         {"id": None},
-        {"id": "42"},
+        {"id": "042"},
+        {"id": "42.0"},
+        {"id": "+42"},
+        {"id": 2**63},
         {"id": True},
         {"exp": 1},
         {"iat": 9999999999},
@@ -114,3 +117,8 @@ def test_signature_cannot_be_replaced():
     _, unrelated_keys = signed_identity()
     with pytest.raises(JoseError):
         spike.verify_identity(token, unrelated_keys, "client", "nonce")
+
+
+def test_profile_id_can_be_a_canonical_decimal_string():
+    token, keys = signed_identity(id="42")
+    assert spike.verify_identity(token, keys, "client", "nonce") == 42

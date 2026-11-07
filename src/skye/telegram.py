@@ -66,7 +66,7 @@ from .models import (
     Scope,
     ScopeKind,
 )
-from .quota import QuotaService
+from .quota import AllowanceError, QuotaService
 from .rich import RichMessages, format_tokens, sparks_amount, sparks_mark
 from .runtime import (
     AgentRuntime,
@@ -95,6 +95,7 @@ from .telegram_projects import (
     TelegramProjectService,
     project_reply_keyboard,
 )
+from .telegram_receipts import activity_category, album_media, message_media
 from .telegram_threads import thread_id
 from .turns import Admission, BusyTurn, DuplicateRun, TurnService
 from .ui import MODEL_PROVIDER_ICONS, Icon, activity_message
@@ -1151,10 +1152,14 @@ class TelegramApp:
             project = await self.telegram_projects.active(context.user_id)
             thread = await threads.sync_project(context.user_id, project.id)
             stopped = self.runtime.stop_key(f"thread:{thread.record.id}")
+            if not stopped and self.turns is not None:
+                stopped = await self.turns.cancel_thread(context.scope, thread.record.id)
         elif threads is not None:
             ref = await self.conversations.get_or_create(context.chat_id, context.thread_id)
             thread = await threads.group(context.chat_id, context.thread_id, ref)
             stopped = self.runtime.stop_key(f"thread:{thread.record.id}")
+            if not stopped and self.turns is not None:
+                stopped = await self.turns.cancel_thread(context.scope, thread.record.id)
         else:
             stopped = self.runtime.stop(context.chat_id, context.thread_id)
         await self.rich.send(message, "Stopping…" if stopped else "Nothing is running here.")
@@ -1640,12 +1645,14 @@ class TelegramApp:
             chat_type=context.chat_type,
         )
         self._forget_retry(context)
+        album_kwargs: dict[str, Any] = {"received_album": album} if album else {}
         await self._stream_turn(
             message,
             context,
             user_input,
             conversation_id=conversation_id,
             extra_instructions=extra_instructions,
+            **album_kwargs,
         )
 
     def enqueue_automation(self, item: Automation, body: str = "") -> None:
@@ -1707,6 +1714,7 @@ class TelegramApp:
         conversation_id: str | None = None,
         extra_instructions: str = "",
         draft: bool | None = None,
+        received_album: Sequence[MediaGroupItem] = (),
     ) -> None:
         current = await self.database.get_settings(context.scope)
         payer_id = await self.sparks.payer(context)
@@ -1732,6 +1740,8 @@ class TelegramApp:
         sent_holder = {"count": 0}
         canonical_thread = None
         canonical_run_id: str | None = None
+        admission: Admission | None = None
+        delivery_finalized = False
         threads = getattr(getattr(self, "telegram_projects", None), "threads", None)
         turns = getattr(self, "turns", None)
         if threads is not None and context.chat_type == "private":
@@ -1771,6 +1781,27 @@ class TelegramApp:
 
         async def on_event(event: RunEvent) -> None:
             nonlocal used_tool
+            if (
+                turns is not None
+                and canonical_run_id is not None
+                and event.kind == "provider_receipt"
+            ):
+                await turns.record_provider_receipt(
+                    canonical_run_id, event.provider_response_id, event.usage_snapshot
+                )
+            if (
+                threads is not None
+                and canonical_run_id is not None
+                and event.kind in {"tool", "activity"}
+            ):
+                await threads.record_activity(
+                    context.scope,
+                    canonical_run_id,
+                    activity_category(event.tool_name),
+                    {"done": "completed", "error": "failed"}.get(
+                        event.tool_status, event.tool_status
+                    ),
+                )
             if event.kind == "tool":
                 used_tool = True
             if event.kind == "tool" and event.tool_name in {
@@ -1824,6 +1855,25 @@ class TelegramApp:
             sent_holder["count"] += 1
             placeholder = None
 
+        async def record_media(target: Message) -> None:
+            if (
+                threads is not None
+                and canonical_thread is not None
+                and canonical_run_id is not None
+            ):
+                media = message_media(target)
+                if media:
+                    await threads.append(
+                        context.scope,
+                        canonical_thread.record.id,
+                        role="assistant",
+                        origin="telegram" if message is not None else "automation",
+                        text=target.caption or "",
+                        receipt=f"tg:{context.chat_id}:{target.message_id}",
+                        run_id=canonical_run_id,
+                        media=media,
+                    )
+
         async def on_voice(audio: bytes, reply_to: int | None = None) -> None:
             nonlocal placeholder, last_target
             await activity.send("upload_voice")
@@ -1853,6 +1903,8 @@ class TelegramApp:
                     reply_markup=markup,
                     reply_to=reply_to,
                 )
+            if last_target is not None:
+                await record_media(last_target)
             sent_holder["count"] += 1
 
         def remember_failed() -> None:
@@ -1877,16 +1929,28 @@ class TelegramApp:
                     canonical_run_id = run_id
                     if canonical_thread is not None and message is not None:
                         assert threads is not None
-                        visible_text = message.text or message.caption
-                        if visible_text:
+                        if received_album:
+                            for item in received_album:
+                                await threads.append(
+                                    context.scope,
+                                    canonical_thread.record.id,
+                                    role="user",
+                                    origin="telegram",
+                                    text=item.caption or "",
+                                    receipt=f"tg:{context.chat_id}:{item.message_id}",
+                                    run_id=run_id,
+                                    media=(album_media(item),),
+                                )
+                        elif message.text or message.caption or message_media(message):
                             await threads.append(
                                 context.scope,
                                 canonical_thread.record.id,
                                 role="user",
                                 origin="telegram",
-                                text=visible_text,
+                                text=message.text or message.caption or "",
                                 receipt=f"tg:{context.chat_id}:{message.message_id}",
                                 run_id=run_id,
+                                media=message_media(message),
                             )
                     kwargs: dict[str, Any] = {}
                     if run_id is not None:
@@ -1929,14 +1993,6 @@ class TelegramApp:
                         admission.paid,
                         admission.complimentary,
                     )
-                    if not paid and not complimentary:
-                        await self._show_free_spend(context, message, payer_id)
-                    elif paid:
-                        cost = self.sparks.cost_milli(
-                            output.usage, provider_cost_rub=output.usage.provider_cost_rub
-                        )
-                        if cost > 0:
-                            await self._show_spend(context, message, payer_id, cost, output.usage)
                 else:
                     output = await execute()
                     await self._settle_turn(context, message, payer_id, paid, complimentary, output)
@@ -1954,6 +2010,12 @@ class TelegramApp:
                 )
                 if message is not None and context.chat_type != "private":
                     await self.groups.mark_seen(message)
+                delivery_callbacks: dict[str, Any] = {}
+                if canonical_thread is not None:
+                    delivery_callbacks = {
+                        "on_delivered": record_delivery,
+                        "on_media_delivered": record_media,
+                    }
                 await self._finish_visible(
                     message,
                     context,
@@ -1962,8 +2024,33 @@ class TelegramApp:
                     output,
                     awaiting_reply=awaiting_reply,
                     activity=activity,
-                    **({"on_delivered": record_delivery} if canonical_thread is not None else {}),
+                    **delivery_callbacks,
                 )
+                if turns is not None and canonical_run_id is not None:
+                    await turns.finish_delivery(canonical_run_id, complete=True)
+                    delivery_finalized = True
+                    if admission is not None:
+                        await turns.settle_delivered(canonical_run_id, admission, output)
+                        settled = await self.database.fetch_one(
+                            "SELECT 1 FROM run_settlements WHERE run_id=?", (canonical_run_id,)
+                        )
+                        if not settled and message is not None:
+                            await self._notify(
+                                message,
+                                context,
+                                "Your reply was delivered. Usage is pending billing "
+                                "reconciliation, so no spend is shown as settled yet.",
+                            )
+                        elif not admission.paid and not admission.complimentary:
+                            await self._show_free_spend(context, message, payer_id)
+                        elif admission.paid:
+                            cost = self.sparks.cost_milli(
+                                output.usage, provider_cost_rub=output.usage.provider_cost_rub
+                            )
+                            if cost > 0:
+                                await self._show_spend(
+                                    context, message, payer_id, cost, output.usage
+                                )
                 if message is not None and context.chat_type == "private":
                     capability = self._growth_capability(message, output, used_tool)
                     if await self.growth.completed_task(context.user_id, capability):
@@ -1977,13 +2064,18 @@ class TelegramApp:
                                 ]
                             ),
                         )
+        except AllowanceError as error:
+            if message is not None:
+                await self._finish_turn(message, context, placeholder, str(error))
         except DuplicateRun:
             # A Telegram update redelivery must not execute or charge twice.
             return
         except BusyTurn:
             if message is not None:
                 await self._finish_turn(
-                    message, context, placeholder,
+                    message,
+                    context,
+                    placeholder,
                     "This thread already has an active request. Use /stop first.",
                 )
         except TimeoutError:
@@ -2030,6 +2122,13 @@ class TelegramApp:
                     f"Something went wrong. Please try again.{retry_hint}",
                 )
                 remember_failed()
+
+        finally:
+            if turns is not None and canonical_run_id is not None and not delivery_finalized:
+                try:
+                    await turns.finish_delivery(canonical_run_id, complete=False)
+                except Exception:
+                    log.warning("delivery_receipt_finalize_failed", run_id=canonical_run_id)
 
     async def _thinking(self, message: Message | None, context: RequestContext) -> Message:
         if message is not None:
@@ -2177,6 +2276,7 @@ class TelegramApp:
         awaiting_reply: bool,
         activity: TelegramActivity | None = None,
         on_delivered: Callable[[str, Message], Awaitable[None]] | None = None,
+        on_media_delivered: Callable[[Message], Awaitable[None]] | None = None,
     ) -> None:
         leftover = leftover_reply(output, awaiting_reply=awaiting_reply)
         if leftover:
@@ -2192,7 +2292,14 @@ class TelegramApp:
         elif placeholder is not None:
             await self.rich.delete(placeholder)
             placeholder = None
-        await self._flush_media(message, context, last_target, output, activity=activity)
+        await self._flush_media(
+            message,
+            context,
+            last_target,
+            output,
+            activity=activity,
+            **({"on_delivered": on_media_delivered} if on_media_delivered is not None else {}),
+        )
 
     async def _flush_media(
         self,
@@ -2202,6 +2309,7 @@ class TelegramApp:
         output: RunOutput,
         *,
         activity: TelegramActivity | None = None,
+        on_delivered: Callable[[Message], Awaitable[None]] | None = None,
     ) -> None:
         if not output.images and not output.files:
             return
@@ -2209,23 +2317,39 @@ class TelegramApp:
             if output.images:
                 if activity is not None:
                     await activity.send("upload_photo")
-                await self.rich.send_images(target, output.images)
+                await self.rich.send_images(
+                    target,
+                    output.images,
+                    **({"on_delivered": on_delivered} if on_delivered is not None else {}),
+                )
             if output.files:
                 if activity is not None:
                     await activity.send("upload_document")
-                await self.rich.send_documents(target, output.files)
+                await self.rich.send_documents(
+                    target,
+                    output.files,
+                    **({"on_delivered": on_delivered} if on_delivered is not None else {}),
+                )
             return
         if output.images:
             if activity is not None:
                 await activity.send("upload_photo")
             await self.rich.send_images_chat(
-                context.chat_id, context.thread_id, output.images, reply=message
+                context.chat_id,
+                context.thread_id,
+                output.images,
+                reply=message,
+                **({"on_delivered": on_delivered} if on_delivered is not None else {}),
             )
         if output.files:
             if activity is not None:
                 await activity.send("upload_document")
             await self.rich.send_documents_chat(
-                context.chat_id, context.thread_id, output.files, reply=message
+                context.chat_id,
+                context.thread_id,
+                output.files,
+                reply=message,
+                **({"on_delivered": on_delivered} if on_delivered is not None else {}),
             )
 
     async def _deliver(

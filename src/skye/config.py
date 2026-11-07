@@ -101,6 +101,9 @@ class Settings(BaseSettings):
     skye_web_port: int = Field(default=8090, ge=1024, le=65535)
     skye_oidc_client_id: str | None = None
     skye_oidc_client_secret: str | None = None
+    skye_oidc_callback_path: Literal["/api/v1/auth/callback", "/auth/callback"] = (
+        "/api/v1/auth/callback"
+    )
     skye_web_internal_token: str | None = Field(default=None, min_length=32)
     # Shared pictures and files are kept per scope so any later message and any
     # tool can reuse them. One directory per user or chat, bounded by an idle
