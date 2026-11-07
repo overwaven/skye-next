@@ -100,13 +100,19 @@ are logged.
   real API (fake provider) covering text send, live tool step, run details, image upload
   and delivery, rename and draft reload. Artifact:
   `web/test-results/stage45-connected.json`.
+- Live provider check through the deployed API on 2026-11-07: a new thread completed a
+  real `hi` turn with two committed messages, `delivery_state=complete`, no failure and
+  no wallet charge (complimentary). The verification thread was archived. Three earlier
+  failed holds caused by the input-envelope bug were settled explicitly at zero usage
+  with operator evidence `stage45-input-shape-fix`.
 
 ## Known limits
 
 - Only one real Telegram account is available; the strict two-account isolation gate is
   still unmet and is not claimed.
-- The connected browser proof uses a deterministic runtime on the operator machine. Live
-  provider acceptance needs an actual paid or free run with the deployed bot.
+- The connected browser proof uses a deterministic runtime on the operator machine. A
+  live free-provider turn completed through the deployed API, but live browser acceptance
+  still needs the account owner to send from the UI.
 - Telegram file bytes that were never saved in the shared media library remain
   unavailable for download; the UI says so instead of guessing.
 - Memory/skills/connectors/preferences do not have web editors yet (Stage 6). Changes

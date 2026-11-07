@@ -75,6 +75,7 @@ class FakeRuntime:
     def __init__(self) -> None:
         self.block = False
         self.release = asyncio.Event()
+        self.inputs: list[object] = []
 
     async def run(
         self,
@@ -84,6 +85,7 @@ class FakeRuntime:
         on_text: object,
         **kwargs: Any,
     ) -> RunOutput:
+        self.inputs.append(user_input)
         on_event = kwargs.get("on_event")
         on_reply = kwargs.get("on_reply")
         if on_event is not None:
@@ -246,6 +248,12 @@ async def main() -> None:
         assert snapshot["run"]["state"] == "completed"
         assert snapshot["run"]["delivery_state"] == "complete"
         assert any(item["label"] == "Searched the web" for item in snapshot["activities"])
+        assert isinstance(runtime.inputs[0], list)
+        assert runtime.inputs[0][0]["role"] == "user"
+        assert runtime.inputs[0][0]["content"][0] == {
+            "type": "input_text",
+            "text": "Show me the steps",
+        }
         report(
             "send.sse",
             run=receipt["run_id"],

@@ -235,7 +235,7 @@ class WebTurnRunner:
             output = await self.runtime.run(
                 context,
                 settings,
-                cast(list[TResponseInputItem], content),
+                content,
                 _noop,
                 run_key=f"thread:{thread.record.id}",
                 conversation_id=thread.session_ref,
@@ -269,7 +269,7 @@ class WebTurnRunner:
 
     async def _content(
         self, user_id: int, request: SendRequest, refs: list[MediaRef]
-    ) -> list[dict[str, Any]]:
+    ) -> list[TResponseInputItem]:
         content: list[dict[str, Any]] = [{"type": "input_text", "text": request.text}]
         for ref in refs:
             _, data = await self.media.read(user_id, ref.record.id)
@@ -302,7 +302,7 @@ class WebTurnRunner:
                         "Attached", name, mime, data, native_media=self.native_media
                     )
                 )
-        return content
+        return cast(list[TResponseInputItem], [{"role": "user", "content": content}])
 
     async def _deliver_media(
         self, user_id: int, thread_id: str, run_id: str, output: RunOutput

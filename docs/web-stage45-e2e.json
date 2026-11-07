@@ -5,7 +5,7 @@
     {
       "step": "thread.created",
       "ok": true,
-      "thread_id": "48797f1ac6c84608a2a43339bf05d10f"
+      "thread_id": "1dd036a283784f89a4db7e4015209d0a"
     },
     {
       "step": "state.empty",
@@ -18,7 +18,7 @@
     {
       "step": "send.sse",
       "ok": true,
-      "run": "fc76f00cc7b9484d976d4287f55f3ece",
+      "run": "1c36881cc1b24f649814288ba329901e",
       "events": [
         "run.changed",
         "message.created",
@@ -33,17 +33,17 @@
     {
       "step": "media.upload",
       "ok": true,
-      "media_id": "7d262f7b4567451d8ba3409b9a6cde46"
+      "media_id": "aef03c66ce8344bfbb10e30b1d4cd8c4"
     },
     {
       "step": "media.sent",
       "ok": true,
-      "part": "55d53b66c09b4b769353633d4964fd14"
+      "part": "a1dc98f87dde47beae5f52fe591d8b78"
     },
     {
       "step": "voice.transcribed",
       "ok": true,
-      "media_id": "b4c3936265e74b4bad4517c46b33ee36"
+      "media_id": "df5e583eb3e54049975cf48d84d004fa"
     },
     {
       "step": "thread.renamed",
@@ -52,7 +52,7 @@
     {
       "step": "run.stopped",
       "ok": true,
-      "run": "9fb8543273504579bdc9e99e0bdc0d5e"
+      "run": "9942f3a5b0b14071a462f9dee98d4a6b"
     },
     {
       "step": "thread.archived",
