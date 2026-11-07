@@ -19,8 +19,11 @@ from .models import Scope
 from .transcript import legacy_deliveries
 from .web_auth import SCHEMA as AUTH_SCHEMA
 from .web_contracts import FilePart, ProjectRecord, TextPart, ThreadRecord, VisibleMessage
+from .web_events import WebEventStore
 
 # Applied only by the explicit migration command, not by Database.open().
+_UNSET = object()
+
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS web_schema (version INTEGER PRIMARY KEY);
 CREATE TABLE IF NOT EXISTS threads (
@@ -143,21 +146,46 @@ class MediaReceipt:
     media_type: str
     source_file_id: str | None = None
     size: int | None = None
+    availability: Literal["available", "expired", "unresolved"] = "unresolved"
 
 
 class ThreadStore:
-    def __init__(self, database: Database) -> None:
+    def __init__(self, database: Database, events: WebEventStore | None = None) -> None:
         self.database = database
+        self.events = events
 
     async def require_schema(self) -> None:
         try:
-            row = await self.database.fetch_one("SELECT version FROM web_schema WHERE version = 2")
+            row = await self.database.fetch_one("SELECT MAX(version) FROM web_schema")
         except aiosqlite.OperationalError:
             raise RuntimeError(
                 "Run the backed-up canonical migration before enabling web"
             ) from None
-        if row is None:
+        version = int(row[0]) if row is not None and row[0] is not None else 0
+        if version < 2:
             raise RuntimeError("Run the backed-up canonical migration before enabling web")
+        if version < 3:
+            await self.database._ensure_column(
+                "run_activity", "label", "TEXT NOT NULL DEFAULT ''"
+            )
+            await self.database._ensure_column(
+                "run_activity", "tool_id", "TEXT NOT NULL DEFAULT ''"
+            )
+            await self.database._ensure_column("canonical_runs", "failure", "TEXT")
+        # Additive runtime schema for sending, events and web media. Never
+        # rewrites existing rows, so a v2 cutover can roll forward in place.
+        # CREATE IF NOT EXISTS also repairs a v3 row written without events.
+        await self.database._ensure_column(
+            "run_activity", "label", "TEXT NOT NULL DEFAULT ''"
+        )
+        await self.database._ensure_column(
+            "run_activity", "tool_id", "TEXT NOT NULL DEFAULT ''"
+        )
+        await self.database._ensure_column("canonical_runs", "failure", "TEXT")
+        if self.events is not None:
+            await self.events.install(self.database.conn)
+        await self.database.conn.execute("INSERT OR IGNORE INTO web_schema VALUES (3)")
+        await self.database.conn.commit()
 
     async def migrate(self) -> dict[str, int]:
         """Run offline against a backed-up database. Repeat-safe, additive cutover."""
@@ -170,6 +198,10 @@ class ThreadStore:
         await self.database._ensure_column(
             "canonical_runs", "delivery_state", "TEXT NOT NULL DEFAULT 'pending'"
         )
+        await self.database._ensure_column("canonical_runs", "failure", "TEXT")
+        await self.database._ensure_column("run_activity", "label", "TEXT NOT NULL DEFAULT ''")
+        await self.database._ensure_column("run_activity", "tool_id", "TEXT NOT NULL DEFAULT ''")
+        await WebEventStore(self.database).install(self.database.conn)
         await self.database.conn.commit()
         counts = {"projects": 0, "private": 0, "groups": 0, "automations": 0}
         async with self.database.transaction() as conn:
@@ -260,6 +292,7 @@ class ThreadStore:
                     OR m.created_at < (SELECT MIN(r.created_at) FROM canonical_runs r
                                        WHERE r.thread_id=t.id))),0) FROM threads t""")
             await conn.execute("INSERT OR IGNORE INTO web_schema VALUES (2)")
+            await conn.execute("INSERT OR IGNORE INTO web_schema VALUES (3)")
         return counts
 
     @staticmethod
@@ -418,7 +451,67 @@ class ThreadStore:
             thread_id = await self._insert(
                 conn, Scope("user", owner), project_id, title, f"thread:{uuid4().hex}"
             )
-        return await self.require(Scope("user", owner), thread_id)
+        thread = await self.require(Scope("user", owner), thread_id)
+        if self.events is not None:
+            await self.events.publish(
+                thread.scope,
+                "resource.changed",
+                {"type": "resource.changed", "resource": "thread", "resource_id": thread.record.id},
+                thread_id=thread.record.id,
+            )
+        return thread
+
+    async def update(
+        self,
+        owner: int,
+        thread_id: str,
+        *,
+        title: str | None = None,
+        project_id: object = _UNSET,
+        archived: bool | None = None,
+    ) -> Thread:
+        thread = await self.require(Scope("user", owner), thread_id)
+        assignments: list[str] = []
+        values: list[object] = []
+        if title is not None:
+            cleaned = " ".join(title.split())
+            if not 1 <= len(cleaned) <= 128:
+                raise ValueError("Thread title must be 1–128 characters")
+            assignments.append("title=?")
+            values.append(cleaned)
+        if project_id is not _UNSET:
+            if project_id is not None:
+                row = await self.database.fetch_one(
+                    "SELECT 1 FROM telegram_projects WHERE id=? AND user_id=? AND kind='custom'",
+                    (project_id, owner),
+                )
+                if row is None:
+                    raise LookupError("Project not found")
+            assignments.append("project_id=?")
+            values.append(project_id)
+        if archived is not None:
+            assignments.append("archived=?")
+            values.append(1 if archived else 0)
+        if not assignments:
+            return thread
+        assignments.append("revision=revision+1")
+        values.append(thread.record.id)
+        await self.database.execute_write(
+            f"UPDATE threads SET {','.join(assignments)} WHERE id=?", tuple(values)
+        )
+        updated = await self.require(thread.scope, thread.record.id)
+        if self.events is not None:
+            await self.events.publish(
+                thread.scope,
+                "resource.changed",
+                {
+                    "type": "resource.changed",
+                    "resource": "thread",
+                    "resource_id": updated.record.id,
+                },
+                thread_id=updated.record.id,
+            )
+        return updated
 
     async def select(self, owner: int, project_id: str, thread_id: str) -> Thread:
         thread = await self.require(Scope("user", owner), thread_id)
@@ -479,7 +572,7 @@ class ThreadStore:
                     file_id=uuid4().hex,
                     name=PurePosixPath(item.name.replace("\\", "/")).name[:200] or "File",
                     media_type=item.media_type[:128],
-                    availability="unresolved",
+                    availability=item.availability,
                 )
                 for item in media
             ]
@@ -504,6 +597,13 @@ class ThreadStore:
                     "INSERT INTO canonical_media VALUES(?,?,?,?)",
                     (part.file_id, result.id, item.source_file_id, item.size),
                 )
+        if self.events is not None:
+            await self.events.publish(
+                scope,
+                "message.created",
+                {"type": "message.created", "message": result.model_dump()},
+                thread_id=thread_id,
+            )
         return result
 
     async def history(
@@ -550,6 +650,13 @@ class ThreadStore:
                 "UPDATE history_cutovers SET source_last_id=0 WHERE thread_id=?", (thread_id,)
             )
             await conn.execute("UPDATE threads SET revision=revision+1 WHERE id=?", (thread_id,))
+        if self.events is not None:
+            await self.events.publish(
+                scope,
+                "resource.changed",
+                {"type": "resource.changed", "resource": "thread", "resource_id": thread_id},
+                thread_id=thread_id,
+            )
 
     async def by_session(self, scope: Scope, ref: str) -> Thread:
         row = await self.database.fetch_one(
@@ -690,7 +797,16 @@ class ThreadStore:
             counts["messages"] += len(deliveries)
         return counts
 
-    async def record_activity(self, scope: Scope, run_id: str, category: str, status: str) -> None:
+    async def record_activity(
+        self,
+        scope: Scope,
+        run_id: str,
+        category: str,
+        status: str,
+        *,
+        label: str = "",
+        tool_id: str = "",
+    ) -> None:
         if category not in {
             "web",
             "image",
@@ -707,7 +823,7 @@ class ThreadStore:
         async with self.database.transaction() as conn:
             row = await (
                 await conn.execute(
-                    "SELECT 1 FROM canonical_runs r JOIN threads t "
+                    "SELECT t.id AS thread_id FROM canonical_runs r JOIN threads t "
                     "ON t.id=r.thread_id WHERE r.id=? AND t.scope_kind=? AND t.scope_id=?",
                     (run_id, scope.kind, scope.id),
                 )
@@ -715,10 +831,12 @@ class ThreadStore:
             if row is None:
                 raise LookupError("Run not found")
             now = time.time()
-            await conn.execute(
-                "INSERT INTO run_activity(run_id,category,status,created) VALUES(?,?,?,?)",
-                (run_id, category, status, now),
+            cursor = await conn.execute(
+                "INSERT INTO run_activity(run_id,category,status,label,tool_id,created) "
+                "VALUES(?,?,?,?,?,?)",
+                (run_id, category, status, label[:120], tool_id[:120], now),
             )
+            activity_id = int(cursor.lastrowid or 0)
             await conn.execute("DELETE FROM run_activity WHERE created<?", (now - 86400,))
             await conn.execute(
                 "DELETE FROM run_activity WHERE id IN (SELECT a.id FROM run_activity a "
@@ -726,11 +844,34 @@ class ThreadStore:
                 "WHERE t.scope_kind=? AND t.scope_id=? ORDER BY a.id DESC LIMIT -1 OFFSET 10000)",
                 (scope.kind, scope.id),
             )
+        if self.events is not None:
+            await self.events.publish(
+                scope,
+                "run.activity",
+                {
+                    "type": "run.activity",
+                    "run_id": run_id,
+                    "activity": {
+                        "sequence": activity_id,
+                        "category": category,
+                        "status": status,
+                        "label": label[:120],
+                        "tool_id": tool_id[:120],
+                    },
+                },
+                thread_id=str(row["thread_id"]),
+            )
+
+    async def publish_resource(self, scope: Scope, resource: str, resource_id: str) -> None:
+        if self.events is not None:
+            await self.events.publish_resource(scope, resource, resource_id)
 
     async def prune_activity(self) -> None:
         await self.database.execute_write(
             "DELETE FROM run_activity WHERE created<?", (time.time() - 86400,)
         )
+        if self.events is not None:
+            await self.events.prune()
 
     async def run_janitor(self) -> None:
         while True:

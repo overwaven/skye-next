@@ -160,6 +160,13 @@ _TOOL_LABELS: dict[str, str] = {
 }
 
 
+def safe_tool_label(name: str) -> str:
+    """Public labels are curated; raw third-party names never reach a transcript."""
+    if name.startswith("agent_"):
+        return "Asked a specialist"
+    return _TOOL_LABELS.get(name, "Used a tool")
+
+
 @dataclass(frozen=True, slots=True)
 class RunOutput:
     text: str

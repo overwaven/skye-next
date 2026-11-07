@@ -1,0 +1,67 @@
+{
+  "version": 1,
+  "status": "passed",
+  "steps": [
+    {
+      "step": "thread.created",
+      "ok": true,
+      "thread_id": "48797f1ac6c84608a2a43339bf05d10f"
+    },
+    {
+      "step": "state.empty",
+      "ok": true
+    },
+    {
+      "step": "sse.snapshot",
+      "ok": true
+    },
+    {
+      "step": "send.sse",
+      "ok": true,
+      "run": "fc76f00cc7b9484d976d4287f55f3ece",
+      "events": [
+        "run.changed",
+        "message.created",
+        "run.activity",
+        "run.activity",
+        "message.created",
+        "run.changed",
+        "run.changed"
+      ],
+      "messages": 2
+    },
+    {
+      "step": "media.upload",
+      "ok": true,
+      "media_id": "7d262f7b4567451d8ba3409b9a6cde46"
+    },
+    {
+      "step": "media.sent",
+      "ok": true,
+      "part": "55d53b66c09b4b769353633d4964fd14"
+    },
+    {
+      "step": "voice.transcribed",
+      "ok": true,
+      "media_id": "b4c3936265e74b4bad4517c46b33ee36"
+    },
+    {
+      "step": "thread.renamed",
+      "ok": true
+    },
+    {
+      "step": "run.stopped",
+      "ok": true,
+      "run": "9fb8543273504579bdc9e99e0bdc0d5e"
+    },
+    {
+      "step": "thread.archived",
+      "ok": true,
+      "send_status": 400
+    }
+  ],
+  "counts": {
+    "steps": 10,
+    "sse_events": 7
+  }
+}

@@ -694,31 +694,52 @@ streams; existing Telegram resources appear under the correct web account.
 
 Dependencies: Stages 1–3. This is the first restricted internal alpha, not the full release.
 
-- [ ] Send text idempotently, accept background run, commit multiple visible replies,
+- [x] Send text idempotently, accept background run, commit multiple visible replies,
       safe activity and settlement; implement snapshot + replay SSE and resource invalidation.
-- [ ] Bind MessageScroller to cursor history and real deliveries; safe Markdown/code/citations.
-- [ ] Add New thread, titles, project/unassigned selection, move/archive, drafts and keyboard send.
-- [ ] Implement explicit Telegram continuation/thread selection and bidirectional updates.
-- [ ] Add Stop, failed-send retry, run details, offline/reconnect, busy, moderation, context-limit,
+- [x] Bind MessageScroller to cursor history and real deliveries; safe Markdown/code/citations.
+- [x] Add New thread, titles, project/unassigned selection, move/archive, drafts and keyboard send.
+- [x] Implement explicit Telegram continuation/thread selection and bidirectional updates.
+- [x] Add Stop, failed-send retry, run details, offline/reconnect, busy, moderation, context-limit,
       provider-error and interrupted states. Do not expose private raw assistant output.
-- [ ] Revalidate changed memory/skills/connectors/preferences in web after Telegram mutations,
+- [x] Revalidate changed memory/skills/connectors/preferences in web after Telegram mutations,
       including model-tool mutations; publish events at the shared service/repository boundary.
+
+Implementation: the web uses the same `TurnService`, `AgentRuntime` and `MediaLibrary` as
+Telegram. `POST /threads/{id}/messages` is idempotent by request id, waits only for
+admission, then runs in the background. Canonical `web_events` feed snapshot-first SSE,
+run state, committed messages and labelled tool steps; the same events carry Telegram
+appends. Memory tool changes and thread/project changes publish resource events, and the
+shell revalidates server components on tab focus for the remaining resource panels.
+Private model prose and tool arguments/results never enter the stream. Run cost is shown
+from settlement state; unknown usage remains visibly pending.
 
 **Exit scenario:** start a named thread on web, continue that exact thread in Telegram,
 return to web and see the same ordered replies and cost; simultaneous tabs do not double-send;
 disconnect/reload does not lose an accepted run or charge twice.
+The API E2E exercises creation, admission, SSE, run details, cancellation and
+duplicate-safe settlement. Two real accounts are still unavailable, so cross-account
+isolation remains covered synthetically only.
 
 ### Stage 5 — Files, images, voice, and safe artifacts
 
 Dependencies: Stage 4.
 
-- [ ] Authenticated bounded uploads, opaque attachment IDs, file metadata/references and
+- [x] Authenticated bounded uploads, opaque attachment IDs, file metadata/references and
       library picker using existing MediaLibrary and image/tool source rules.
-- [ ] Previews/downloads, generated-image/file deliveries and citations; isolate unsafe content.
-- [ ] Recording with permission/format detection, transcription review and playback/transcripts;
+- [x] Previews/downloads, generated-image/file deliveries and citations; isolate unsafe content.
+- [x] Recording with permission/format detection, transcription review and playback/transcripts;
       server audio endpoints reuse services and explicit metering policy.
-- [ ] Handle file limits/eviction/expiry, upload cancellation/retry, duplicate names,
+- [x] Handle file limits/eviction/expiry, upload cancellation/retry, duplicate names,
       unsupported media, microphone denial and slow networks without losing drafts.
+
+Implementation: uploads are opaque media ids over the per-scope `MediaLibrary`; the picker
+lists both web uploads and Telegram-saved files. Downloads are owner-scoped, images are
+inline with `nosniff` and a sandbox CSP, everything else is an attachment; HTML/SVG/script
+types are rejected. Generated pictures and files are stored back and rendered in the same
+thread. Recording uses `MediaRecorder`, a bounded transcription endpoint, an editable
+review and local playback before attach. Transcription is not separately charged in this
+release (25 MB / 10 per minute per account); this policy is explicit and bounded until a
+price exists. Expired library bytes stay visible as expired rather than guessed.
 
 **Exit:** a Telegram photo can be selected/edited on web and the result reused in the
 same account; a web document/voice message works in the shared thread; expired bytes

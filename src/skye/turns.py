@@ -25,9 +25,10 @@ from .db import Database
 from .models import ChatSettings, RequestContext, Scope
 from .pricing import TurnUsage
 from .quota import AllowanceError, QuotaService
-from .runtime import RunOutput
+from .runtime import ContextLimitError, RunOutput
 from .sparks import SparkService
 from .threads import Thread
+from .web_events import WebEventStore, run_status
 
 
 class DuplicateRun(ValueError):
@@ -47,9 +48,15 @@ class Admission:
 
 class TurnService:
     def __init__(
-        self, database: Database, access: AccessService, quota: QuotaService, sparks: SparkService
+        self,
+        database: Database,
+        access: AccessService,
+        quota: QuotaService,
+        sparks: SparkService,
+        events: WebEventStore | None = None,
     ) -> None:
         self.database, self.access, self.quota, self.sparks = database, access, quota, sparks
+        self.events = events
         self._payer_locks: defaultdict[int, asyncio.Lock] = defaultdict(asyncio.Lock)
         self._thread_locks: defaultdict[str, asyncio.Lock] = defaultdict(asyncio.Lock)
         self._tasks: dict[str, asyncio.Task[object]] = {}
@@ -63,6 +70,7 @@ class TurnService:
         operation: Callable[[Admission, str], Awaitable[RunOutput]],
         *,
         settings: ChatSettings | None = None,
+        on_admitted: Callable[[str], None] | None = None,
     ) -> tuple[RunOutput, Admission, str]:
         if thread.scope != context.scope:
             raise PermissionError("This conversation is unavailable")
@@ -72,7 +80,14 @@ class TurnService:
         assert task is not None
         self._thread_tasks[thread.record.id] = task
         try:
-            return await self._execute(thread, context, request_key, operation, settings=settings)
+            return await self._execute(
+                thread,
+                context,
+                request_key,
+                operation,
+                settings=settings,
+                on_admitted=on_admitted,
+            )
         finally:
             self._thread_tasks.pop(thread.record.id, None)
 
@@ -84,6 +99,7 @@ class TurnService:
         operation: Callable[[Admission, str], Awaitable[RunOutput]],
         *,
         settings: ChatSettings | None = None,
+        on_admitted: Callable[[str], None] | None = None,
     ) -> tuple[RunOutput, Admission, str]:
         if thread.scope != context.scope or not await self.access.allowed(context):
             raise PermissionError("This conversation is unavailable")
@@ -145,6 +161,9 @@ class TurnService:
             task = asyncio.current_task()
             assert task is not None
             self._tasks[run_id] = task
+            await self._publish_run(run_id)
+            if on_admitted is not None:
+                on_admitted(run_id)
             try:
                 output = await operation(admission, run_id)
                 await self.queue_reconciliation(
@@ -158,11 +177,11 @@ class TurnService:
                 return output, admission, run_id
             except asyncio.CancelledError:
                 await self.queue_reconciliation(run_id, "interrupted")
-                await self._state(run_id, "cancelled")
+                await self._state(run_id, "cancelled", failure="interrupted")
                 raise
-            except BaseException:
+            except BaseException as error:
                 await self.queue_reconciliation(run_id, "execution_failed")
-                await self._state(run_id, "failed")
+                await self._state(run_id, "failed", failure=_failure_code(error))
                 raise
             finally:
                 self._tasks.pop(run_id, None)
@@ -190,6 +209,13 @@ class TurnService:
         task = self._thread_tasks.get(thread_id)
         if task is None:
             return False
+        active = await self.database.fetch_one(
+            "SELECT id FROM canonical_runs WHERE thread_id=? AND state IN ('accepted','running') "
+            "ORDER BY created_at DESC LIMIT 1",
+            (thread_id,),
+        )
+        if active is not None:
+            await self._state(str(active[0]), "cancelling")
         task.cancel()
         return True
 
@@ -202,6 +228,7 @@ class TurnService:
             "THEN 'partial' ELSE 'failed' END WHERE id=?",
             (complete, run_id),
         )
+        await self._publish_run(run_id)
 
     async def settle_delivered(self, run_id: str, admission: Admission, output: RunOutput) -> None:
         """Charge only after the adapter has confirmed its delivery boundary."""
@@ -219,13 +246,35 @@ class TurnService:
         except AllowanceError:
             await self.queue_reconciliation(run_id, "insufficient_funds", output)
 
-    async def _state(self, run_id: str, state: str) -> None:
+    async def _state(self, run_id: str, state: str, *, failure: str | None = None) -> None:
         await self.database.execute_write(
-            "UPDATE canonical_runs SET state=?, cost_state=CASE WHEN EXISTS "
+            "UPDATE canonical_runs SET state=?, failure=COALESCE(?,failure), cost_state=CASE "
+            "WHEN EXISTS "
             "(SELECT 1 FROM run_settlements WHERE run_id=canonical_runs.id) THEN 'settled' "
             "WHEN ?='completed' THEN cost_state WHEN cost_milli IS NOT NULL THEN 'pending' "
             "ELSE 'unknown' END WHERE id=?",
-            (state, state, run_id),
+            (state, failure, state, run_id),
+        )
+        await self._publish_run(run_id)
+
+    async def _publish_run(self, run_id: str) -> None:
+        if self.events is None:
+            return
+        row = await self.database.fetch_one(
+            "SELECT r.*,t.scope_kind,t.scope_id FROM canonical_runs r "
+            "JOIN threads t ON t.id=r.thread_id WHERE r.id=?",
+            (run_id,),
+        )
+        if row is None:
+            return
+        kind: Literal["user", "chat"] = (
+            "user" if str(row["scope_kind"]) == "user" else "chat"
+        )
+        await self.events.publish(
+            Scope(kind, int(row["scope_id"])),
+            "run.changed",
+            {"type": "run.changed", "run": run_status(row).model_dump()},
+            thread_id=str(row["thread_id"]),
         )
 
     async def settle(self, run_id: str, admission: Admission, output: RunOutput) -> None:
@@ -490,3 +539,15 @@ class TurnService:
             "usage_json=COALESCE(excluded.usage_json,run_provider_receipts.usage_json)",
             (run_id, reference, json.dumps(asdict(usage)) if usage is not None else None),
         )
+
+
+def _failure_code(error: BaseException) -> str:
+    """Map provider/runtime failures to a safe, non-sensitive run reason."""
+    if isinstance(error, ContextLimitError):
+        return "context"
+    name = type(error).__name__.lower()
+    if "moderation" in name:
+        return "moderation"
+    if isinstance(error, AllowanceError):
+        return "quota"
+    return "provider"

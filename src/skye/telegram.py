@@ -76,6 +76,7 @@ from .runtime import (
     StreamStartedError,
     _input_metadata,
     leftover_reply,
+    safe_tool_label,
 )
 from .skills import SkillError, SkillPanel, SkillService, SkillWizard
 from .sparks import (
@@ -99,6 +100,7 @@ from .telegram_receipts import activity_category, album_media, message_media
 from .telegram_threads import thread_id
 from .turns import Admission, BusyTurn, DuplicateRun, TurnService
 from .ui import MODEL_PROVIDER_ICONS, Icon, activity_message
+from .web_events import WebEventStore
 
 log = structlog.get_logger()
 REASONING: tuple[Reasoning, ...] = ("none", "low", "medium", "high", "xhigh", "max")
@@ -190,6 +192,7 @@ class TelegramApp:
         billing: BillingService,
         sparks: SparkService,
         automations: AutomationService | None = None,
+        events: WebEventStore | None = None,
     ) -> None:
         self.config = config
         self.picker_prices = PickerPrices()
@@ -212,7 +215,7 @@ class TelegramApp:
         self.automations = automations
         self.quota = QuotaService(database, access)
         self.turns = (
-            TurnService(database, access, self.quota, sparks)
+            TurnService(database, access, self.quota, sparks, events=events)
             if telegram_projects.threads is not None
             else None
         )
@@ -1801,7 +1804,22 @@ class TelegramApp:
                     {"done": "completed", "error": "failed"}.get(
                         event.tool_status, event.tool_status
                     ),
+                    label=(
+                        "Recorded a voice reply"
+                        if event.kind == "activity"
+                        else safe_tool_label(event.tool_name)
+                    ),
+                    tool_id=event.tool_id or event.tool_name,
                 )
+                if (
+                    event.kind == "tool"
+                    and event.tool_name in {"remember", "forget"}
+                    and event.tool_status == "done"
+                    and canonical_thread is not None
+                ):
+                    await threads.publish_resource(
+                        context.scope, "memory", canonical_thread.record.id
+                    )
             if event.kind == "tool":
                 used_tool = True
             if event.kind == "tool" and event.tool_name in {

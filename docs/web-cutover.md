@@ -49,8 +49,9 @@ Do not mark the combined production exit gates passed:
   requires explicit operator evidence via `scripts/reconcile_run.py`. This is new
   operational work and needs an actual-provider exercise before paid web sending.
 - Production ingress/TLS for the Next.js client and internal API token, operational
-  restore, and real-account acceptance remain release work. Web send, streams, uploads
-  and resource CRUD are still not exposed.
+  restore, and real-account acceptance remain release work. Stage 4–5 now exposes web
+  send, SSE, thread management, uploads and voice transcription; resource CRUD beyond
+  thread move/archive remains Stage 6. See `docs/web-stage45.md`.
 - A temporary isolated OIDC verification service (`skye-oidc-verification`) and two
   Caddy paths (`/api/v1/spike/auth/start`, `/auth/callback`) are active **only** for this
   test. They must be stopped and removed after the second account test; see cleanup below.
@@ -312,7 +313,8 @@ is absent. Delete local credential copies as well. Never commit an env file.
 - **Live cutover:** the actual volume was backed up and migrated, then served through
   the new web container. Counts and checks are above; this supersedes the copy-only
   rehearsal statement.
-- Web: **39 foundation browser tests passed** across Chromium/Firefox/WebKit. Axe waits
+- Web: **39 foundation browser tests passed** across Chromium/Firefox/WebKit, plus the
+  Stage 4–5 API and connected-browser proofs in `docs/web-stage45.md`. Axe waits
   for settled overlays; fading text was an audit timing artifact, not a reason to disable
   contrast checks. Python Ruff, strict mypy (50 files), TypeScript, contracts and
   production build are checked separately.

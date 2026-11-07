@@ -54,6 +54,7 @@ from .telegram import COMMANDS, PRIVATE_COMMANDS, TelegramApp, UpdateMiddleware
 from .telegram_projects import TelegramProjectService
 from .threads import ThreadStore
 from .web_api import create_app as create_web_app
+from .web_events import WebEventStore
 
 log = structlog.get_logger()
 
@@ -120,7 +121,10 @@ async def run() -> None:
     config.require_openrouter()
     if config.skye_web_enabled and not config.skye_canonical_threads:
         raise ValueError("Web requires SKYE_CANONICAL_THREADS and the offline migration")
-    threads = ThreadStore(database) if config.skye_canonical_threads else None
+    events = WebEventStore(database) if config.skye_canonical_threads else None
+    threads = (
+        ThreadStore(database, events=events) if config.skye_canonical_threads else None
+    )
     if threads is not None:
         await threads.require_schema()
         interrupted = await threads.interrupt_runs()
@@ -312,6 +316,7 @@ async def run() -> None:
         billing,
         sparks,
         automations,
+        events=events,
     )
     dispatcher.update.outer_middleware(UpdateMiddleware(database, groups, media_groups))
     dispatcher.include_router(telegram.router)
@@ -321,7 +326,16 @@ async def run() -> None:
         if config.skye_web_enabled:
             assert threads is not None
             web_runner = web.AppRunner(
-                create_web_app(config, database, threads, access, turns=telegram.turns),
+                create_web_app(
+                    config,
+                    database,
+                    threads,
+                    access,
+                    turns=telegram.turns,
+                    runtime=runtime,
+                    files=files,
+                    events=events,
+                ),
                 access_log=None,
             )
             await web_runner.setup()

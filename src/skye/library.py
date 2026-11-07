@@ -167,6 +167,20 @@ class MediaLibrary:
             raise ValueError("Use a saved file name.")
         return candidate.read_bytes()
 
+    def remove(self, scope: Scope, name: str) -> bool:
+        directory = self.scope_dir(scope).resolve()
+        cleaned = name.replace("\\", "/").strip().lstrip("/")
+        if not cleaned or ".." in PurePosixPath(cleaned).parts:
+            raise ValueError("Use a saved file name.")
+        candidate = (directory / cleaned).resolve()
+        if candidate != directory and directory not in candidate.parents:
+            raise ValueError("Use a saved file name.")
+        try:
+            candidate.unlink()
+        except FileNotFoundError:
+            return False
+        return True
+
     def describe(self, scope: Scope, limit: int = DEFAULT_LIST_LIMIT) -> str:
         """One compact line listing the newest saved files, or an empty string."""
         entries = self.entries(scope)[-limit:]

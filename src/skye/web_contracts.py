@@ -52,6 +52,17 @@ class ThreadRecord(Contract):
     revision: int = Field(ge=1)
 
 
+class ThreadCreate(Contract):
+    title: str = Field(min_length=1, max_length=128)
+    project_id: str | None = None
+
+
+class ThreadUpdate(Contract):
+    title: str | None = Field(default=None, min_length=1, max_length=128)
+    project_id: str | None = None
+    archived: bool | None = None
+
+
 class SessionRecord(Contract):
     user_id: int = Field(gt=0)
     csrf_token: str = Field(min_length=32)
@@ -60,8 +71,9 @@ class SessionRecord(Contract):
 class Capabilities(Contract):
     version: Literal[1] = 1
     private_only: Literal[True] = True
-    send: Literal[False] = False
-    uploads: Literal[False] = False
+    send: Literal[True] = True
+    uploads: Literal[True] = True
+    voice: Literal[True] = True
     payments: Literal["telegram_stars"] = "telegram_stars"
     retention: Literal["until_explicit_deletion"] = "until_explicit_deletion"
     resources: Literal["account_wide"] = "account_wide"
@@ -93,6 +105,36 @@ class SendRequest(Contract):
     request_id: str = Field(min_length=16, max_length=128)
     text: str = Field(min_length=1, max_length=32_000)
     file_ids: list[str] = Field(default_factory=list, max_length=20)
+    transcripts: dict[str, str] = Field(default_factory=dict)
+
+
+class SendReceipt(Contract):
+    thread_id: str
+    run_id: str
+    request_id: str
+
+
+class StopReceipt(Contract):
+    stopped: bool
+
+
+class MediaRecord(Contract):
+    id: str
+    name: str = Field(min_length=1, max_length=200)
+    media_type: str = Field(min_length=1, max_length=128)
+    size: int = Field(ge=0)
+    created_at: float = Field(ge=0)
+    is_image: bool = False
+    availability: Literal["available", "expired"] = "available"
+
+
+class MediaList(Contract):
+    media: list[MediaRecord]
+
+
+class Transcription(Contract):
+    text: str = Field(max_length=32_000)
+    media: MediaRecord
 
 
 class APIError(Contract):
@@ -125,6 +167,18 @@ class RunStatus(Contract):
     label: str
     cost_milli: int | None = Field(default=None, ge=0)
     cost_state: Literal["pending", "settled", "unknown"] = "pending"
+    delivery_state: Literal["pending", "complete", "partial", "failed"] = "pending"
+    failure: (
+        Literal["quota", "provider", "moderation", "context", "interrupted", "unknown"] | None
+    ) = None
+
+
+class ActivityRecord(Contract):
+    sequence: int = Field(ge=1)
+    category: Literal["web", "image", "voice", "code", "memory", "connector", "automation", "tool"]
+    status: Literal["running", "completed", "failed"]
+    label: str = ""
+    tool_id: str = ""
 
 
 class RunEvent(Contract):
@@ -132,10 +186,10 @@ class RunEvent(Contract):
     run: RunStatus
 
 
-class ActivityRecord(Contract):
-    sequence: int = Field(ge=1)
-    category: Literal["web", "image", "voice", "code", "memory", "connector", "automation", "tool"]
-    status: Literal["running", "completed", "failed"]
+class ActivityEvent(Contract):
+    type: Literal["run.activity"] = "run.activity"
+    run_id: str
+    activity: ActivityRecord
 
 
 class RunDetails(Contract):
@@ -158,7 +212,18 @@ class ResourceEvent(Contract):
 class EventEnvelope(Contract):
     version: Literal[1] = 1
     cursor: str
-    data: Annotated[RunEvent | MessageEvent | ResourceEvent, Field(discriminator="type")]
+    data: Annotated[
+        RunEvent | ActivityEvent | MessageEvent | ResourceEvent, Field(discriminator="type")
+    ]
+
+
+class Snapshot(Contract):
+    thread: ThreadRecord
+    messages: list[VisibleMessage]
+    older_than: int | None = Field(default=None, ge=1)
+    run: RunStatus | None = None
+    activities: list[ActivityRecord] = Field(default_factory=list)
+    cursor: str = "0"
 
 
 class WebContract(Contract):
@@ -166,14 +231,22 @@ class WebContract(Contract):
 
     project: ProjectRecord
     thread: ThreadRecord
+    thread_create: ThreadCreate
+    thread_update: ThreadUpdate
     message: VisibleMessage
     send: SendRequest
+    send_receipt: SendReceipt
+    stop_receipt: StopReceipt
+    media: MediaRecord
+    media_list: MediaList
+    transcription: Transcription
     error: APIError
     event: EventEnvelope
     session: SessionRecord
     project_list: ProjectList
     thread_list: ThreadList
     message_page: MessagePage
+    snapshot: Snapshot
     capabilities: Capabilities
     preferences: PreferencesRecord
     run_details: RunDetails
