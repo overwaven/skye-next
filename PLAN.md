@@ -1,8 +1,9 @@
 # Skye Web Chat — Implementation Plan
 
-Status: approved defaults; Stage 1 foundation implemented; Stage 0 local checks complete,
-with real-provider Telegram OIDC verification blocked on operator setup. Stages 2–10
-are not implemented. Research and verification date: 2026-11-07.
+Status: Stage 1 complete; Stage 2 canonical/shared-turn core and Stage 3 authenticated
+read-only path implemented behind default-off flags. Stage 0 real-provider OIDC and
+the Stage 2–3 production exit gates remain open. Stages 4–10 are not implemented.
+Research and verification date: 2026-11-07. Evidence: `docs/web-cutover.md`.
 
 ## 1. Outcome and product boundaries
 
@@ -638,15 +639,22 @@ focus behavior, measured accessible tokens. No fake working chat or invented usa
 
 Dependencies: Stage 0 contracts.
 
-- [ ] Add versioned schema for threads/projects/bindings/visible transcript/runs and revisions.
-- [ ] Migrate existing sessions repeat-safely; validate ownership, counts, instructions, files,
+- [x] Add versioned schema for threads/projects/bindings/visible transcript/runs and revisions.
+- [x] Migrate existing sessions repeat-safely; validate ownership, counts, instructions, files,
       defaults and group/topic behavior. Preserve backups and legacy lookup during cutover.
-- [ ] Extract shared turn/admission/settlement services; use canonical run keys and transport.
+- [x] Extract shared turn/admission/settlement services; use canonical run keys and transport.
 - [ ] Implement per-payer concurrency safety, run-id-based idempotent billing, cancellation,
       delivery receipts, interrupted-run state and safe activity/visible-message projection.
-- [ ] Adapt Telegram projects, thread selection, reset/delete/stop/retry and automation routing
+- [x] Adapt Telegram projects, thread selection, reset/delete/stop/retry and automation routing
       to shared services. Explicitly decide command semantics where a project now has many threads.
-- [ ] Keep metadata-only logs; document actual storage and retention consistently.
+- [x] Keep metadata-only logs; document actual storage and retention consistently.
+
+Implemented/tested: per-payer/thread serialization, durable deduplication, atomic run-ID
+settlement, cancellation/interruption, default-only instructions, `/threads`, group
+exclusion/reset, retained project history and pinned private automation firing. The
+unchecked item still includes voice/image/file receipts, durable activity projection
+and unknown-cost reconciliation. Legacy history stays intact but is not backfilled;
+the UI says so. Actual-deployment migration/restore and cutover are not performed.
 
 **Exit:** Telegram behavior passes regression tests; one project can hold independent threads;
 both adapters can invoke one shared service without duplicate execution or charges.
@@ -655,12 +663,17 @@ both adapters can invoke one shared service without duplicate execution or charg
 
 Dependencies: Stage 2 ownership model; incorporate Stage 0 OIDC spike.
 
-- [ ] Integrate Python HTTP startup/shutdown into existing bootstrap behind a feature flag.
-- [ ] Implement OIDC login/callback, hashed opaque sessions, CSRF, revocation and rate limits.
-- [ ] Add authenticated capability/preferences/project/thread/history endpoints and generated TS.
-- [ ] Add Next.js login/protected routes, server-fetch adapter, safe errors and no-store behavior.
-- [ ] Test wrong claims, replay, stale state, bad callbacks, missing profile ID, unknown key,
+- [x] Integrate Python HTTP startup/shutdown into existing bootstrap behind a feature flag.
+- [x] Implement OIDC login/callback, hashed opaque sessions, CSRF, revocation and rate limits.
+- [x] Add authenticated capability/preferences/project/thread/history endpoints and generated TS.
+- [x] Add Next.js login/protected routes, server-fetch adapter, safe errors and no-store behavior.
+- [x] Test wrong claims, replay, stale state, bad callbacks, missing profile ID, unknown key,
       account mismatch, expired/revoked session and cross-user requests.
+
+Local evidence: 568 Python tests, 33 foundation browser tests, plus synthetic two-account
+Next.js → Python read-only rendering/axe/logout checks in all three browser engines.
+These are not two real Telegram accounts: real-provider claims, HTTPS cookie flow and
+operator acceptance still block the production exit. Web sending/streams remain absent.
 
 **Exit:** two real accounts remain isolated across UI, API, caches, media placeholders and
 streams; existing Telegram resources appear under the correct web account.
@@ -896,7 +909,7 @@ These are gates with proposed defaults, not reasons to delay writing the plan:
 7. **Billing/runtime:** no paid web launch before shared admission, settlement and account UI;
    no raw-model text streaming that violates Skye's delivery-only voice contract.
 
-Next gate: finish **Stage 0 real-provider OIDC verification** with operator credentials
-and a registered origin. Stage 1 is complete as disconnected framing. Stage 2 and later
-remain separate implementation work; do not treat local fixture tests as a live login,
-production migration or synchronized account client.
+Next gates: finish **Stage 0 real-provider OIDC verification** with operator credentials
+and a registered origin; close Stage 2's remaining receipt/activity/reconciliation work
+and rehearse the actual cutover. Stage 3's read-only path is opt-in, not deployed. Do not
+treat synthetic isolation tests as real login or enable Stage 4 paid web sending yet.

@@ -99,6 +99,10 @@ replay is stored separately in SQLite by `DatabaseSession` (`agent_messages`); d
 confuse metadata-only logging with a claim that conversation history is never stored.
 The optional web foundation's retention and migration contracts live in
 `docs/web-foundation.md`; its development lab is not part of the production bootstrap.
+The later canonical-thread/read-only API cutover is documented in `docs/web-cutover.md`.
+`SKYE_CANONICAL_THREADS` and `SKYE_WEB_ENABLED` default to false; do not enable them
+without the explicit offline backup/migration and operator acceptance gates. Existing
+runtime history is retained, not automatically exposed as a web transcript.
 Dozzle detects the JSON automatically, colour-codes levels,
 groups tracebacks, and can query the fields with its built-in SQL engine
 (`SELECT * FROM logs WHERE kind = 'turn'`, `WHERE level = 'error'`).

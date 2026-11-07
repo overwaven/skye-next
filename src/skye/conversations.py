@@ -2,13 +2,16 @@ import asyncio
 from collections import defaultdict
 
 from .db import Database
+from .models import Scope
+from .threads import ThreadStore
 
 
 class ConversationService:
     """Local-only conversation ids. History lives in DatabaseSession (SQLite)."""
 
-    def __init__(self, database: Database) -> None:
+    def __init__(self, database: Database, threads: ThreadStore | None = None) -> None:
         self.database = database
+        self.threads = threads
         self._locks: defaultdict[tuple[int, int], asyncio.Lock] = defaultdict(asyncio.Lock)
 
     async def get_or_create(self, chat_id: int, thread_id: int) -> str:
@@ -24,6 +27,13 @@ class ConversationService:
     async def reset(self, chat_id: int, thread_id: int) -> bool:
         key = chat_id, thread_id
         async with self._locks[key]:
+            if self.threads is not None and chat_id < 0:
+                existing = await self.database.conversation_id(*key)
+                if existing is None:
+                    return False
+                thread = await self.threads.group(chat_id, thread_id, existing)
+                await self.threads.clear_scope(Scope("chat", chat_id), thread.record.id)
+                return True
             conversation_id = await self.database.pop_conversation(*key)
             if not conversation_id:
                 return False

@@ -20,6 +20,7 @@ from aiogram.types import (
 from .db import Database
 from .models import RequestContext, TelegramProject
 from .rich import RichMessages
+from .threads import ThreadStore
 
 DEFAULT_EMOJI = "☁️"
 PROJECT_KEYBOARD_PROJECTS = "Projects"
@@ -113,14 +114,17 @@ def origin_suffix(from_settings: bool) -> str:
 
 
 class TelegramProjectService:
-    def __init__(self, database: Database) -> None:
+    def __init__(self, database: Database, threads: ThreadStore | None = None) -> None:
         self.database = database
+        self.threads = threads
         self._locks: defaultdict[str, asyncio.Lock] = defaultdict(asyncio.Lock)
 
     async def ensure_skye(self, user_id: int) -> TelegramProject:
         existing = await self.database.skye_telegram_project(user_id)
         if existing is not None:
             await self._ensure_active(user_id, existing)
+            if self.threads is not None:
+                await self.threads.sync_project(user_id, existing.id)
             return existing
         migrated = await self.database.conversation_id(user_id, 0)
         created = await self.database.create_telegram_project(
@@ -139,6 +143,8 @@ class TelegramProjectService:
         if migrated:
             await self.database.pop_conversation(user_id, 0)
         await self.database.set_active_telegram_project_id(user_id, created.id)
+        if self.threads is not None:
+            await self.threads.sync_project(user_id, created.id)
         return created
 
     async def list(self, user_id: int) -> list[TelegramProject]:
@@ -213,6 +219,8 @@ class TelegramProjectService:
         )
         if updated is None:
             raise LookupError("Project not found.")
+        if self.threads is not None:
+            await self.threads.sync_project(user_id, project_id)
         return updated
 
     async def select(self, user_id: int, project_id: str) -> TelegramProject:
@@ -225,7 +233,8 @@ class TelegramProjectService:
         project = await self.database.delete_telegram_project(user_id, project_id)
         if project is None:
             raise LookupError("Project not found.")
-        await self._delete_conversation(project.openai_conversation_id)
+        if self.threads is None:
+            await self._delete_conversation(project.openai_conversation_id)
         active_id = await self.database.active_telegram_project_id(user_id)
         if active_id == project.id:
             skye = await self.ensure_skye(user_id)
@@ -234,12 +243,19 @@ class TelegramProjectService:
 
     async def reset(self, user_id: int, project_id: str) -> TelegramProject:
         project = await self.require(user_id, project_id)
+        if self.threads is not None:
+            thread = await self.threads.sync_project(user_id, project_id)
+            await self.threads.clear(user_id, thread.record.id)
+            return project
         await self._delete_conversation(project.openai_conversation_id)
         await self.database.set_telegram_conversation(user_id, project_id, None)
         return await self.require(user_id, project_id)
 
     async def conversation_id(self, project: TelegramProject) -> str:
         async with self._locks[project.id]:
+            if self.threads is not None:
+                thread = await self.threads.sync_project(project.user_id, project.id)
+                return thread.session_ref
             current = await self.require(project.user_id, project.id)
             if current.openai_conversation_id:
                 return current.openai_conversation_id
@@ -389,9 +405,7 @@ def project_keyboard(
         rows.append(
             [InlineKeyboardButton(text="Delete", callback_data=f"proj:del:{project.id}{suffix}")]
         )
-    rows.append(
-        [InlineKeyboardButton(text="‹ Back", callback_data=f"proj:home{suffix}")]
-    )
+    rows.append([InlineKeyboardButton(text="‹ Back", callback_data=f"proj:home{suffix}")])
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
@@ -404,9 +418,7 @@ def emoji_keyboard(
     rows: list[list[InlineKeyboardButton]] = []
     row: list[InlineKeyboardButton] = []
     for index, emoji in enumerate(PRESET_EMOJIS):
-        callback = (
-            f"proj:emo:{index}" if project_id is None else f"proj:icon:{project_id}:{index}"
-        )
+        callback = f"proj:emo:{index}" if project_id is None else f"proj:icon:{project_id}:{index}"
         row.append(InlineKeyboardButton(text=emoji, callback_data=callback))
         if len(row) == 4:
             rows.append(row)
@@ -470,9 +482,7 @@ class ProjectPanel:
         projects = await self.service.list(context.user_id)
         active = await self.service.active(context.user_id)
         content = self.rich.projects(projects, active.id, notice=notice)
-        markup = projects_keyboard(
-            projects, active.id, page=page, from_settings=from_settings
-        )
+        markup = projects_keyboard(projects, active.id, page=page, from_settings=from_settings)
         if edit:
             await self.rich.edit(message, content, reply_markup=markup)
         else:
@@ -489,9 +499,7 @@ class ProjectPanel:
     ) -> None:
         if action == ["home"] or action == ["home", "s"]:
             await state.clear()
-            await self.show_home(
-                message, context, from_settings=from_settings_origin(action, 1)
-            )
+            await self.show_home(message, context, from_settings=from_settings_origin(action, 1))
             return
         if action and action[0] == "page":
             page = int(action[1]) if len(action) > 1 and action[1].isdigit() else 0
@@ -529,9 +537,7 @@ class ProjectPanel:
             await self.rich.edit(
                 message,
                 self.rich.project_emoji_prompt(),
-                reply_markup=cancel_keyboard(
-                    from_settings=from_settings, project_id=project_id
-                ),
+                reply_markup=cancel_keyboard(from_settings=from_settings, project_id=project_id),
             )
             return
         if len(action) == 2 and action[0] == "emo" and action[1].isdigit():
@@ -620,7 +626,9 @@ class ProjectPanel:
             project = await self.service.require(context.user_id, action[1])
             await self.rich.edit(
                 message,
-                self.rich.project_delete_confirm(project),
+                self.rich.project_delete_confirm(
+                    project, retain_threads=self.service.threads is not None
+                ),
                 reply_markup=project_keyboard(
                     project,
                     active=False,
@@ -657,9 +665,7 @@ class ProjectPanel:
                 await self.rich.send(
                     message,
                     self.rich.project_emoji_prompt(),
-                    reply_markup=emoji_keyboard(
-                        from_settings=bool(data.get("from_settings"))
-                    ),
+                    reply_markup=emoji_keyboard(from_settings=bool(data.get("from_settings"))),
                 )
                 return
             await state.set_state(ProjectWizard.instructions)

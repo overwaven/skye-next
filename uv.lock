@@ -1588,10 +1588,12 @@ dependencies = [
     { name = "aiohttp" },
     { name = "aiohttp-socks" },
     { name = "aiosqlite" },
+    { name = "authlib" },
     { name = "av" },
     { name = "fal-client" },
     { name = "faster-whisper" },
     { name = "httpx" },
+    { name = "joserfc" },
     { name = "openai" },
     { name = "openai-agents" },
     { name = "pillow" },
@@ -1604,13 +1606,13 @@ dependencies = [
 
 [package.dev-dependencies]
 dev = [
-    { name = "authlib" },
     { name = "hatchling" },
     { name = "mypy" },
     { name = "pytest" },
     { name = "pytest-aiohttp" },
     { name = "pytest-asyncio" },
     { name = "ruff" },
+    { name = "types-authlib" },
 ]
 
 [package.metadata]
@@ -1619,10 +1621,12 @@ requires-dist = [
     { name = "aiohttp", specifier = ">=3.11.0" },
     { name = "aiohttp-socks", specifier = ">=0.12.0" },
     { name = "aiosqlite", specifier = ">=0.21.0" },
+    { name = "authlib", specifier = ">=1.6.6" },
     { name = "av", specifier = ">=18.1.0" },
     { name = "fal-client", specifier = ">=1.0.3" },
     { name = "faster-whisper", specifier = ">=1.2.1" },
     { name = "httpx", specifier = ">=0.28.0" },
+    { name = "joserfc", specifier = ">=1.6.0" },
     { name = "openai", specifier = ">=2.52.0" },
     { name = "openai-agents", specifier = ">=0.19.2" },
     { name = "pillow", specifier = ">=12.3.0" },
@@ -1635,13 +1639,13 @@ requires-dist = [
 
 [package.metadata.requires-dev]
 dev = [
-    { name = "authlib", specifier = ">=1.6.6" },
     { name = "hatchling", specifier = ">=1.27.0" },
     { name = "mypy", specifier = ">=1.17.0" },
     { name = "pytest", specifier = ">=8.4.0" },
     { name = "pytest-aiohttp", specifier = ">=1.1" },
     { name = "pytest-asyncio", specifier = ">=1.1.0" },
     { name = "ruff", specifier = ">=0.12.0" },
+    { name = "types-authlib", specifier = ">=1.8.0.20261106" },
 ]
 
 [[package]]
@@ -1794,6 +1798,18 @@ source = { registry = "https://pypi.org/simple" }
 sdist = { url = "https://files.pythonhosted.org/packages/ee/9f/c5201d42a484c061e528825fc8e2d565f5abd50a4ced6fb7d29c4ec99b2b/truststore-0.10.5.tar.gz", hash = "sha256:30d36967ccaded5cbb38d602c433f53600036c79d502f4533a49b60a03bbefcd", size = 28091, upload-time = "2026-10-12T22:27:31.808Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/51/e9/3a7820be2bb0fe53b6bc9c3be26d3d1158004e4c3ab953aa6840b955b1e9/truststore-0.10.5-py3-none-any.whl", hash = "sha256:9aaaedaefaf06d8b206278cf8b5012bc897f485a874503501e12d776df78951c", size = 19017, upload-time = "2026-10-12T22:27:30.377Z" },
+]
+
+[[package]]
+name = "types-authlib"
+version = "1.8.0.20261106"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "cryptography" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/a4/5a/25fa0dfd1997dc845202e6edadf2ed4eff86a652e46b09bcb9ab867ffaba/types_authlib-1.8.0.20261106.tar.gz", hash = "sha256:09fa4dfc52923fa0190a522b829b79d61472cc9e9555a5dcbde54755d1482b4e", size = 52976, upload-time = "2026-11-06T08:40:35.627Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/2a/88/2d3067039cbb08e9b9e4ce5a17901447370eec4cc3736e68973c5f336845/types_authlib-1.8.0.20261106-py3-none-any.whl", hash = "sha256:1514fc80d66e80096b16c8a171eddd564b7b220d0121ef29ef6390efb83c93ad", size = 112386, upload-time = "2026-11-06T08:40:34.636Z" },
 ]
 
 [[package]]

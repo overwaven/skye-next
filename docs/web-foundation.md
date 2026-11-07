@@ -15,8 +15,9 @@ This document records implementation decisions, not a claim that production web 
 - One Python runtime/writer/scheduler. HTTP and Telegram will call a shared turn service.
   Stage 0's HTTP lab is a separate executable, not mounted in the real app.
 - Use aiohttp for HTTP, Authlib's async HTTPX OAuth client for PKCE/code exchange, and
-  its maintained JOSE successor `joserfc` for signature/claim validation. These are **dev
-  dependencies** during the spike, not production auth yet. Never accept unsigned JWTs.
+  its maintained JOSE successor `joserfc` for signature/claim validation. These began as
+  spike dependencies and are now runtime dependencies for the opt-in Stage 3 API.
+  Never accept unsigned JWTs. See `web-cutover.md` for the current gated implementation.
 - Use Pydantic JSON Schema → `json-schema-to-typescript`; Python validates the wire,
   TypeScript types are generated, not a separate domain model. The generator requires
   both sibling checkouts. Runtime response validation remains an API-stage task.

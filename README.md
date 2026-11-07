@@ -91,7 +91,7 @@ Everything else is optional and turns a capability on:
 
 Speech can also stay on the machine: `SKYE_AUDIO_PROVIDER=local` transcribes voice notes with Whisper large-v3-turbo (the faster-whisper CTranslate2 build of `openai/whisper-large-v3-turbo`) and speaks replies with Supertonic 3 on ONNX Runtime, both on the CPU. The models download once, about 2 GB, into `SKYE_MODELS_DIR`; `SKYE_LOCAL_SPEECH_VOICE` picks `F1`–`F5` or `M1`–`M5`.
 
-The database and every picture and file a user sends live on the `skye-data` volume. There is no inbound port — she uses long polling. Logs are structured JSON on stdout, so `docker compose logs -f` is enough, or start the Dozzle viewer for SQL over the event fields:
+The database and every picture and file a user sends live on the `skye-data` volume. By default there is no inbound port — she uses long polling. Logs are structured JSON on stdout, so `docker compose logs -f` is enough, or start the Dozzle viewer for SQL over the event fields:
 
 ```bash
 cp dozzle/users.yml.example dozzle/users.yml   # generate the hash first, see AGENTS.md
@@ -101,3 +101,14 @@ docker compose --profile logs up -d dozzle     # http://<host>:8080
 To work on the code itself, skip Docker: `uv sync`, then `uv run skye`.
 
 One caution before you enable the sandbox: the compose file mounts `/var/run/docker.sock` so the bot can spawn one container per command, and that is root-equivalent on the host. It is off by default, and so is sandbox network egress.
+
+## Optional web client development
+
+The separate `web/` checkout contains the Next.js interface and an opt-in, read-only
+account path. Canonical threads and the Python HTTP API are disabled by default and
+require an explicit backed-up migration. Web sending, uploads, payments and resource
+edits are not enabled. Real Telegram OIDC verification and production acceptance remain
+open gates; this is not a ready-to-enable public deployment.
+
+See [cutover and verification](docs/web-cutover.md), [foundation decisions](docs/web-foundation.md)
+and [web development](web/README.md). No second database writer or scheduler is introduced.

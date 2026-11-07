@@ -94,6 +94,14 @@ class Settings(BaseSettings):
     skye_connector_timeout_seconds: float = Field(default=30.0, ge=5, le=300)
     skye_owner_ids: OwnerIds = Field(min_length=1)
     skye_database_path: Path = Path("data/skye.db")
+    # Opt-in only after the offline backup/migration command succeeds.
+    skye_canonical_threads: bool = False
+    skye_web_enabled: bool = False
+    skye_web_host: Literal["127.0.0.1", "0.0.0.0"] = "127.0.0.1"
+    skye_web_port: int = Field(default=8090, ge=1024, le=65535)
+    skye_oidc_client_id: str | None = None
+    skye_oidc_client_secret: str | None = None
+    skye_web_internal_token: str | None = Field(default=None, min_length=32)
     # Shared pictures and files are kept per scope so any later message and any
     # tool can reuse them. One directory per user or chat, bounded by an idle
     # TTL and a byte cap.

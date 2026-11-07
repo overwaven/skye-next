@@ -621,10 +621,18 @@ class RichMessages:
         )
 
     @staticmethod
-    def project_delete_confirm(project: TelegramProject) -> InputRichMessage:
+    def project_delete_confirm(
+        project: TelegramProject, *, retain_threads: bool = False
+    ) -> InputRichMessage:
         return RichMessages.prompt(
             "Delete this project?",
-            ["Delete ", _bold(project.label), "? The conversation will be removed."],
+            [
+                "Delete ",
+                _bold(project.label),
+                "? Its threads and history will be kept without a project."
+                if retain_threads
+                else "? The conversation will be removed.",
+            ],
         )
 
     @staticmethod

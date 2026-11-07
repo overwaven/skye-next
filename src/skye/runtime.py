@@ -765,6 +765,7 @@ class AgentRuntime:
         self._run_slots = asyncio.BoundedSemaphore(config.skye_max_concurrent_runs)
         self._running_runs = 0
         self._active: dict[str, _ActiveRun] = {}
+        self._context_keys: defaultdict[tuple[int, int], set[str]] = defaultdict(set)
         self._model_provider = (
             GuardedModelProvider(
                 config,
@@ -790,6 +791,8 @@ class AgentRuntime:
         on_voice: VoiceCallback | None = None,
         manage_automations: bool = False,
         awaiting_reply: bool = True,
+        transport: str = "telegram",
+        canonical_run_id: str | None = None,
     ) -> RunOutput:
         key = run_key or telegram_run_key(context.chat_id, context.thread_id)
         text_model, image_model = await self.conversations.database.model_preferences(
@@ -816,10 +819,10 @@ class AgentRuntime:
             max_audio_bytes=self.config.skye_max_attachment_bytes,
         )
         _ = on_text
-        tpt = "telegram"
+        tpt = transport
         input_chars, input_attachments = _input_metadata(user_input)
         async with self._locks[key]:
-            run_id = uuid4().hex
+            run_id = canonical_run_id or uuid4().hex
             # Tag every log line inside the run — ours and the libraries' — with
             # who it belongs to. Dozzle groups and queries on these fields.
             ctx_tokens = structlog.contextvars.bind_contextvars(
@@ -833,6 +836,8 @@ class AgentRuntime:
             started_turn = time.monotonic()
             active = _ActiveRun()
             self._active[key] = active
+            context_key = (context.chat_id, context.thread_id)
+            self._context_keys[context_key].add(key)
             turn_sandbox: ScopeSandbox | None = None
             connector_stack = AsyncExitStack()
             connector_session: ConnectorSession | None = None
@@ -1012,14 +1017,19 @@ class AgentRuntime:
                             usage=usage,
                         )
             finally:
-                await connector_stack.aclose()
-                structlog.contextvars.reset_contextvars(**dict(ctx_tokens))
-                self._active.pop(key, None)
-                if turn_sandbox is not None:
-                    turn_sandbox.mark_used()
+                try:
+                    await connector_stack.aclose()
+                finally:
+                    structlog.contextvars.reset_contextvars(**dict(ctx_tokens))
+                    self._active.pop(key, None)
+                    self._context_keys[context_key].discard(key)
+                    if not self._context_keys[context_key]:
+                        del self._context_keys[context_key]
+                    if turn_sandbox is not None:
+                        turn_sandbox.mark_used()
 
     def busy(self, chat_id: int, thread_id: int) -> bool:
-        return telegram_run_key(chat_id, thread_id) in self._active
+        return bool(self._context_keys.get((chat_id, thread_id)))
 
     def stop(self, chat_id: int, thread_id: int) -> bool:
         return self.stop_key(telegram_run_key(chat_id, thread_id))

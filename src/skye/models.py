@@ -49,6 +49,7 @@ class RequestContext:
     thread_id: int = 0
     username: str | None = None
     display_name: str = "User"
+    conversation_thread_id: str | None = None
 
     @property
     def scope(self) -> Scope:

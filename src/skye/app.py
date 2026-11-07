@@ -18,6 +18,7 @@ from aiogram.types import (
     BotCommandScopeAllGroupChats,
     BotCommandScopeAllPrivateChats,
 )
+from aiohttp import web
 from openai import AsyncOpenAI
 from pydantic import ValidationError
 from structlog.types import Processor
@@ -51,6 +52,8 @@ from .skills import SkillService
 from .sparks import SparkService
 from .telegram import COMMANDS, PRIVATE_COMMANDS, TelegramApp, UpdateMiddleware
 from .telegram_projects import TelegramProjectService
+from .threads import ThreadStore
+from .web_api import create_app as create_web_app
 
 log = structlog.get_logger()
 
@@ -115,6 +118,14 @@ async def run() -> None:
     await database.open()
     config = await _effective_settings(database, base)
     config.require_openrouter()
+    if config.skye_web_enabled and not config.skye_canonical_threads:
+        raise ValueError("Web requires SKYE_CANONICAL_THREADS and the offline migration")
+    threads = ThreadStore(database) if config.skye_canonical_threads else None
+    if threads is not None:
+        await threads.require_schema()
+        interrupted = await threads.interrupt_runs()
+        if interrupted:
+            log.warning("runs_interrupted_on_start", count=interrupted)
 
     proxy_url = config.skye_proxy_url
     http_client = httpx.AsyncClient(
@@ -204,7 +215,7 @@ async def run() -> None:
         session=AiohttpSession(proxy=proxy_url) if proxy_url else AiohttpSession(),
     )
     dispatcher = Dispatcher()
-    conversations = ConversationService(database)
+    conversations = ConversationService(database, threads)
     memory = MemoryService(database)
     custom_agents = CustomAgentService(database)
     composio = ComposioClient(config.composio_api_key) if config.composio_api_key else None
@@ -237,7 +248,7 @@ async def run() -> None:
     )
     billing = BillingService(database, sparks, config.telegram_bot_token)
     skills = SkillService(database, config.skye_max_attachment_bytes)
-    automations = AutomationService(database, config.skye_web_origin)
+    automations = AutomationService(database, config.skye_web_origin, threads)
     exa = ExaService(config.skye_exa_api_key) if config.skye_exa_api_key else None
     sandbox = (
         SandboxService(
@@ -282,7 +293,7 @@ async def run() -> None:
         if config.skye_moderation_enabled
         else None,
     )
-    telegram_projects = TelegramProjectService(database)
+    telegram_projects = TelegramProjectService(database, threads)
     telegram = TelegramApp(
         config,
         bot,
@@ -305,7 +316,17 @@ async def run() -> None:
     dispatcher.update.outer_middleware(UpdateMiddleware(database, groups, media_groups))
     dispatcher.include_router(telegram.router)
 
+    web_runner: web.AppRunner | None = None
     try:
+        if config.skye_web_enabled:
+            assert threads is not None
+            web_runner = web.AppRunner(
+                create_web_app(config, database, threads, access, turns=telegram.turns),
+                access_log=None,
+            )
+            await web_runner.setup()
+            await web.TCPSite(web_runner, config.skye_web_host, config.skye_web_port).start()
+            log.info("web_started", port=config.skye_web_port)
         bot_info = await bot.get_me()
         if bot_info.can_join_groups and not bot_info.can_read_all_group_messages:
             structlog.get_logger().warning(
@@ -357,6 +378,8 @@ async def run() -> None:
             with contextlib.suppress(asyncio.CancelledError):
                 await files_janitor
     finally:
+        if web_runner is not None:
+            await web_runner.cleanup()
         await connectors.aclose()
         await client.close()
         if image_client is not None and image_client is not client:

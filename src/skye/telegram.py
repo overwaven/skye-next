@@ -5,8 +5,9 @@ import hashlib
 import io
 import json
 import re
+import uuid
 from collections.abc import Awaitable, Callable, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any, Literal, cast
 
 import structlog
@@ -95,6 +96,7 @@ from .telegram_projects import (
     project_reply_keyboard,
 )
 from .telegram_threads import thread_id
+from .turns import Admission, BusyTurn, DuplicateRun, TurnService
 from .ui import MODEL_PROVIDER_ICONS, Icon, activity_message
 
 log = structlog.get_logger()
@@ -208,6 +210,11 @@ class TelegramApp:
         self.growth = GrowthService(database)
         self.automations = automations
         self.quota = QuotaService(database, access)
+        self.turns = (
+            TurnService(database, access, self.quota, sparks)
+            if telegram_projects.threads is not None
+            else None
+        )
         self.rich = RichMessages(bot)
         self.connectors = ConnectorPanel(connectors, self.rich, bot)
         self.skill_panel = SkillPanel(skills, self.rich, bot)
@@ -230,6 +237,8 @@ class TelegramApp:
         self.router.message.register(self.settings, Command("settings"))
         self.router.message.register(self.models, Command("models"))
         self.router.message.register(self.projects, Command("projects"))
+        self.router.message.register(self.threads_command, Command("threads"))
+        self.router.callback_query.register(self.thread_callback, F.data.startswith("thread:"))
         self.router.message.register(
             self.projects,
             F.chat.type == "private",
@@ -1115,22 +1124,110 @@ class TelegramApp:
         self._forget_retry(context)
         if context.chat_type == "private":
             project = await self.telegram_projects.active(context.user_id)
-            await self.telegram_projects.reset(context.user_id, project.id)
+            try:
+                await self.telegram_projects.reset(context.user_id, project.id)
+            except ValueError as error:
+                await self.rich.send(message, str(error))
+                return
             await self.rich.send(
                 message,
                 "Conversation reset. Long-term memory was not changed.",
                 reply_markup=project_reply_keyboard(project),
             )
             return
-        await self.conversations.reset(context.chat_id, context.thread_id)
+        try:
+            await self.conversations.reset(context.chat_id, context.thread_id)
+        except ValueError as error:
+            await self.rich.send(message, str(error))
+            return
         await self.rich.send(message, "Conversation reset. Long-term memory was not changed.")
 
     async def stop(self, message: Message) -> None:
         context = self._context(message)
         if context is None or not await self._require_access(message, context):
             return
-        stopped = self.runtime.stop(context.chat_id, context.thread_id)
+        threads = getattr(getattr(self, "telegram_projects", None), "threads", None)
+        if threads is not None and context.chat_type == "private":
+            project = await self.telegram_projects.active(context.user_id)
+            thread = await threads.sync_project(context.user_id, project.id)
+            stopped = self.runtime.stop_key(f"thread:{thread.record.id}")
+        elif threads is not None:
+            ref = await self.conversations.get_or_create(context.chat_id, context.thread_id)
+            thread = await threads.group(context.chat_id, context.thread_id, ref)
+            stopped = self.runtime.stop_key(f"thread:{thread.record.id}")
+        else:
+            stopped = self.runtime.stop(context.chat_id, context.thread_id)
         await self.rich.send(message, "Stopping…" if stopped else "Nothing is running here.")
+
+    async def threads_command(self, message: Message) -> None:
+        context = self._context(message)
+        if context is None or not await self._require_access(message, context):
+            return
+        store = getattr(self.telegram_projects, "threads", None)
+        if context.chat_type != "private" or store is None:
+            await self.rich.send(message, "Thread selection is available in enabled private chats.")
+            return
+        project = await self.telegram_projects.active(context.user_id)
+        selected = await store.sync_project(context.user_id, project.id)
+        parts = (message.text or "").split(maxsplit=2)
+        if len(parts) >= 2 and parts[1] == "new":
+            title = parts[2] if len(parts) == 3 else "New thread"
+            try:
+                created = await store.create(
+                    context.user_id, project.id if project.kind == "custom" else None, title
+                )
+                await store.select(context.user_id, project.id, created.record.id)
+            except ValueError as error:
+                await self.rich.send(message, str(error))
+                return
+            await self.rich.send(message, f"Continuing in {project.name} · {created.record.title}.")
+            return
+        records = await store.list_threads(context.user_id)
+        choices = [
+            record
+            for record in records
+            if not record.archived
+            and record.project_id == (project.id if project.kind == "custom" else None)
+        ]
+        markup = InlineKeyboardMarkup(
+            inline_keyboard=[
+                [
+                    InlineKeyboardButton(
+                        text=("✓ " if record.id == selected.record.id else "") + record.title,
+                        callback_data=f"thread:{project.id}:{record.id}",
+                    )
+                ]
+                for record in choices[:20]
+            ]
+        )
+        await self.rich.send(
+            message,
+            f"Threads in {project.name}. Showing up to 20. "
+            "Use /threads new <title> to start another. "
+            "/reset clears only the selected thread; deleting a project keeps its threads.",
+            reply_markup=markup,
+        )
+
+    async def thread_callback(self, callback: CallbackQuery) -> None:
+        if callback.from_user is None or callback.data is None:
+            return
+        store = getattr(self.telegram_projects, "threads", None)
+        message = callback.message
+        if store is None or not isinstance(message, Message) or message.chat.type != "private":
+            await callback.answer("Thread unavailable", show_alert=True)
+            return
+        parts = callback.data.split(":")
+        if len(parts) != 3 or await self.access.banned(callback.from_user.id):
+            await callback.answer("Thread unavailable", show_alert=True)
+            return
+        try:
+            thread = await store.select(callback.from_user.id, parts[1], parts[2])
+            project = await self.telegram_projects.require(callback.from_user.id, parts[1])
+        except LookupError:
+            await callback.answer("Thread unavailable", show_alert=True)
+            return
+        await callback.answer()
+        await self.rich.send(message, f"Continuing in {project.name} · {thread.record.title}.")
 
     async def retry(self, message: Message) -> None:
         context = self._context(message)
@@ -1564,9 +1661,26 @@ class TelegramApp:
         conversation_id: str | None = None
         extra_instructions = ""
         if context.chat_type == "private":
-            project = await self.telegram_projects.active(context.user_id)
-            conversation_id = await self.telegram_projects.conversation_id(project)
-            extra_instructions = project.instructions
+            threads = getattr(self.telegram_projects, "threads", None)
+            if threads is not None:
+                binding = await self.database.fetch_one(
+                    "SELECT thread_id FROM automation_thread_bindings WHERE automation_id=?",
+                    (item.id,),
+                )
+                if binding is None:
+                    log.warning(
+                        "automation_skipped", automation_id=item.id, reason="unbound_thread"
+                    )
+                    return
+                thread = await threads.require(context.scope, str(binding[0]))
+                if thread.record.archived:
+                    log.info("automation_skipped", automation_id=item.id, reason="archived_thread")
+                    return
+                conversation_id, extra_instructions = thread.session_ref, thread.instructions
+            else:
+                project = await self.telegram_projects.active(context.user_id)
+                conversation_id = await self.telegram_projects.conversation_id(project)
+                extra_instructions = project.instructions
         try:
             await self._stream_turn(
                 None,
@@ -1616,6 +1730,23 @@ class TelegramApp:
                 placeholder = await self._thinking(message, context)
         last_target = message or placeholder
         sent_holder = {"count": 0}
+        canonical_thread = None
+        canonical_run_id: str | None = None
+        threads = getattr(getattr(self, "telegram_projects", None), "threads", None)
+        turns = getattr(self, "turns", None)
+        if threads is not None and context.chat_type == "private":
+            if conversation_id is None:
+                project = await self.telegram_projects.active(context.user_id)
+                conversation_id = await self.telegram_projects.conversation_id(project)
+            canonical_thread = await threads.by_session(context.scope, conversation_id)
+            extra_instructions = canonical_thread.instructions
+        elif threads is not None:
+            conversation_id = conversation_id or await self.conversations.get_or_create(
+                context.chat_id, context.thread_id
+            )
+            canonical_thread = await threads.group(
+                context.chat_id, context.thread_id, conversation_id
+            )
         active_activities: dict[str, TelegramChatAction] = {}
         used_tool = False
         activity = TelegramActivity(
@@ -1663,6 +1794,22 @@ class TelegramApp:
         async def on_text(_text: str) -> None:
             return
 
+        async def record_delivery(text: str, target: Message) -> None:
+            if (
+                canonical_thread is not None
+                and canonical_run_id is not None
+                and threads is not None
+            ):
+                await threads.append(
+                    context.scope,
+                    canonical_thread.record.id,
+                    role="assistant",
+                    origin="telegram" if message is not None else "automation",
+                    text=text,
+                    receipt=f"tg:{context.chat_id}:{target.message_id}",
+                    run_id=canonical_run_id,
+                )
+
         async def on_reply(text: str, reply_to: int | None = None) -> None:
             nonlocal placeholder, last_target
             last_target = await self._post_visible(
@@ -1672,6 +1819,7 @@ class TelegramApp:
                 text,
                 first=sent_holder["count"] == 0,
                 reply_to=reply_to,
+                **({"on_delivered": record_delivery} if canonical_thread is not None else {}),
             )
             sent_holder["count"] += 1
             placeholder = None
@@ -1711,24 +1859,87 @@ class TelegramApp:
             if message is not None:
                 self._remember_retry(context, user_input, conversation_id, extra_instructions)
 
-        retry_hint = " Send /retry to try again." if message is not None else ""
+        retry_hint = (
+            " Review completed work before /retry; external actions may already have happened."
+            if message is not None and canonical_thread is not None
+            else " Send /retry to try again."
+            if message is not None
+            else ""
+        )
 
         try:
             async with activity:
-                output = await self.runtime.run(
-                    context,
-                    current,
-                    user_input,
-                    on_text,
-                    conversation_id=conversation_id,
-                    extra_instructions=extra_instructions,
-                    manage_automations=manage_automations,
-                    on_event=on_event,
-                    on_reply=on_reply,
-                    on_voice=on_voice,
-                    awaiting_reply=awaiting_reply,
-                )
-                await self._settle_turn(context, message, payer_id, paid, complimentary, output)
+
+                async def execute(
+                    admission: Admission | None = None, run_id: str | None = None
+                ) -> RunOutput:
+                    nonlocal canonical_run_id
+                    canonical_run_id = run_id
+                    if canonical_thread is not None and message is not None:
+                        assert threads is not None
+                        visible_text = message.text or message.caption
+                        if visible_text:
+                            await threads.append(
+                                context.scope,
+                                canonical_thread.record.id,
+                                role="user",
+                                origin="telegram",
+                                text=visible_text,
+                                receipt=f"tg:{context.chat_id}:{message.message_id}",
+                                run_id=run_id,
+                            )
+                    kwargs: dict[str, Any] = {}
+                    if run_id is not None:
+                        assert canonical_thread is not None
+                        kwargs = {
+                            "run_key": f"thread:{canonical_thread.record.id}",
+                            "canonical_run_id": run_id,
+                        }
+                    run_context = (
+                        context
+                        if canonical_thread is None
+                        else replace(context, conversation_thread_id=canonical_thread.record.id)
+                    )
+                    return await self.runtime.run(
+                        run_context,
+                        current,
+                        user_input,
+                        on_text,
+                        conversation_id=conversation_id,
+                        extra_instructions=extra_instructions,
+                        manage_automations=manage_automations,
+                        on_event=on_event,
+                        on_reply=on_reply,
+                        on_voice=on_voice,
+                        awaiting_reply=awaiting_reply,
+                        **kwargs,
+                    )
+
+                if turns is not None and canonical_thread is not None:
+                    # Automation keys are supplied by the explicit binding path;
+                    # a retry is a new intentional request, not an automatic replay.
+                    request_key = f"telegram:{context.chat_id}:" + (
+                        str(message.message_id) if message is not None else uuid.uuid4().hex
+                    )
+                    output, admission, canonical_run_id = await turns.execute(
+                        canonical_thread, context, request_key, execute, settings=current
+                    )
+                    payer_id, paid, complimentary = (
+                        admission.payer_id,
+                        admission.paid,
+                        admission.complimentary,
+                    )
+                    if not paid and not complimentary:
+                        await self._show_free_spend(context, message, payer_id)
+                    elif paid:
+                        cost = self.sparks.cost_milli(
+                            output.usage, provider_cost_rub=output.usage.provider_cost_rub
+                        )
+                        if cost > 0:
+                            await self._show_spend(context, message, payer_id, cost, output.usage)
+                else:
+                    output = await execute()
+                    await self._settle_turn(context, message, payer_id, paid, complimentary, output)
                 log.info(
                     "assistant_reply",
                     kind="message",
@@ -1751,6 +1962,7 @@ class TelegramApp:
                     output,
                     awaiting_reply=awaiting_reply,
                     activity=activity,
+                    **({"on_delivered": record_delivery} if canonical_thread is not None else {}),
                 )
                 if message is not None and context.chat_type == "private":
                     capability = self._growth_capability(message, output, used_tool)
@@ -1765,6 +1977,15 @@ class TelegramApp:
                                 ]
                             ),
                         )
+        except DuplicateRun:
+            # A Telegram update redelivery must not execute or charge twice.
+            return
+        except BusyTurn:
+            if message is not None:
+                await self._finish_turn(
+                    message, context, placeholder,
+                    "This thread already has an active request. Use /stop first.",
+                )
         except TimeoutError:
             if sent_holder["count"] == 0:
                 await self._finish_turn(
@@ -1795,12 +2016,11 @@ class TelegramApp:
             elif placeholder is not None and sent_holder["count"] == 0:
                 await self.rich.delete(placeholder)
         except Exception as error:
-            log.exception(
+            log.error(
                 "agent_run_failed",
                 chat_id=context.chat_id,
                 thread_id=context.thread_id,
                 error=type(error).__name__,
-                error_detail=str(error)[:300],
             )
             if sent_holder["count"] == 0:
                 await self._finish_turn(
@@ -1906,6 +2126,7 @@ class TelegramApp:
         *,
         first: bool,
         reply_to: int | None = None,
+        on_delivered: Callable[[str, Message], Awaitable[None]] | None = None,
     ) -> Message | None:
         chunks = self._chunks(text) or [text.strip() or text]
         last: Message | None = placeholder or message
@@ -1916,6 +2137,8 @@ class TelegramApp:
                 await self.rich.edit(placeholder, content)
                 last = placeholder
                 placeholder = None
+                if on_delivered is not None:
+                    await on_delivered(chunk, last)
                 continue
             if placeholder is not None and index == 0:
                 await self.rich.delete(placeholder)
@@ -1939,6 +2162,8 @@ class TelegramApp:
                     reply_markup=markup,
                     reply_to=quoted,
                 )
+            if on_delivered is not None and last is not None:
+                await on_delivered(chunk, last)
         return last
 
     async def _finish_visible(
@@ -1951,6 +2176,7 @@ class TelegramApp:
         *,
         awaiting_reply: bool,
         activity: TelegramActivity | None = None,
+        on_delivered: Callable[[str, Message], Awaitable[None]] | None = None,
     ) -> None:
         leftover = leftover_reply(output, awaiting_reply=awaiting_reply)
         if leftover:
@@ -1960,6 +2186,7 @@ class TelegramApp:
                 placeholder,
                 leftover,
                 first=True,
+                on_delivered=on_delivered,
             )
             placeholder = None
         elif placeholder is not None:

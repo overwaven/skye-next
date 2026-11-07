@@ -4,6 +4,8 @@ from typing import Annotated, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from .config import Reasoning
+
 
 class Contract(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
@@ -48,6 +50,43 @@ class ThreadRecord(Contract):
     title: str
     archived: bool = False
     revision: int = Field(ge=1)
+
+
+class SessionRecord(Contract):
+    user_id: int = Field(gt=0)
+    csrf_token: str = Field(min_length=32)
+
+
+class Capabilities(Contract):
+    version: Literal[1] = 1
+    private_only: Literal[True] = True
+    send: Literal[False] = False
+    uploads: Literal[False] = False
+    payments: Literal["telegram_stars"] = "telegram_stars"
+    retention: Literal["until_explicit_deletion"] = "until_explicit_deletion"
+    resources: Literal["account_wide"] = "account_wide"
+
+
+class PreferencesRecord(Contract):
+    model: str
+    image_model: str
+    reasoning: Reasoning
+    memory_enabled: bool
+    sparks_display: bool
+
+
+class ProjectList(Contract):
+    projects: list[ProjectRecord]
+
+
+class ThreadList(Contract):
+    threads: list[ThreadRecord]
+
+
+class MessagePage(Contract):
+    messages: list[VisibleMessage]
+    older_than: int | None = Field(default=None, ge=1)
+    legacy_history: Literal["not_backfilled"] = "not_backfilled"
 
 
 class SendRequest(Contract):
@@ -119,3 +158,9 @@ class WebContract(Contract):
     send: SendRequest
     error: APIError
     event: EventEnvelope
+    session: SessionRecord
+    project_list: ProjectList
+    thread_list: ThreadList
+    message_page: MessagePage
+    capabilities: Capabilities
+    preferences: PreferencesRecord
