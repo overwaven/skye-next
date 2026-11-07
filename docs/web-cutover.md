@@ -301,11 +301,15 @@ is absent. Delete local credential copies as well. Never commit an env file.
   account mapping, hashed sessions, idle/absolute expiry, logout/revocation, CSRF, bans,
   forged Host, run/activity owner isolation and internal-secret/session separation.
 - **Live OIDC:** one real existing account passed signature, issuer, audience, nonce,
-  profile-ID and existing-account checks through the registered callback. A second
-  real account is still required for the Stage 3 two-account gate.
-- **Live-data rehearsal:** 13 projects, 5 groups, 28 projected historical messages
-  across 13 threads, zero on repeat; all integrity/ownership/session/wallet/media/restore
-  checks passed on private copies. Live services and database were not modified.
+  profile-ID and existing-account checks through the registered callback. The owner has
+  only one Telegram account, so the strict two-real-account isolation gate is **not
+  claimed**; synthetic two-account tests are the available isolation coverage.
+  A legacy `web_sessions` table with a different schema caused the first production
+  callback to fail at session issuance; the fixed app uses `web_auth_sessions` and
+  preserves the old table. Safe stage-only failure logging was added.
+- **Live cutover:** the actual volume was backed up and migrated, then served through
+  the new web container. Counts and checks are above; this supersedes the copy-only
+  rehearsal statement.
 - Web: **33 foundation browser tests passed** across Chromium/Firefox/WebKit. Axe waits
   for settled overlays; fading text was an audit timing artifact, not a reason to disable
   contrast checks. Python Ruff, strict mypy (50 files), TypeScript, contracts and

@@ -1,10 +1,11 @@
 # Skye Web Chat — Implementation Plan
 
 Status: Stage 1 complete; Stage 2 implementation and Stage 3 authenticated read-only path
-are complete behind default-off flags, with one live OIDC account and a server-copy
-migration/restore rehearsal passed. The second real account, actual cutover and live
-runtime exercise keep the Stage 0/3 exit gates open. Stages 4–10 are not implemented.
-Research and verification date: 2026-11-07. Evidence: `docs/web-cutover.md`.
+are complete and deployed behind an explicit opt-in, with one live OIDC account, live
+migration/restore evidence and a running read-only web client. The two-real-account
+privacy exit cannot be met with the owner's single Telegram account and remains an
+unmet, explicit gate; Stages 4–10 are not implemented. Research date: 2026-11-07.
+Evidence: `docs/web-cutover.md`.
 
 ## 1. Outcome and product boundaries
 
@@ -677,7 +678,10 @@ Evidence: 586 Python tests, 33 foundation browser tests, plus synthetic two-acco
 Next.js → Python read-only rendering/axe/logout checks in all three browser engines.
 **One real existing Telegram account passed live OIDC** signature, issuer, audience,
 nonce, canonical decimal-string `id` and existing-account checks through the registered
-`/auth/callback`. A second real account is still required for the production exit.
+`/auth/callback`. The read-only client is deployed at <https://chat.skye-bot.com>.
+The owner has only one Telegram account; the strict two-real-account isolation exit
+criterion therefore remains unmet and is not claimed. Synthetic two-account coverage
+and live one-account end-to-end evidence stand in its place.
 Live-data migration/restore passed on private server copies (13 projects, 5 groups,
 28 projected messages, zero repeat imports), not on the running database. Web
 sending/streams remain absent; the temporary OIDC lab must be removed.

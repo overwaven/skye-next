@@ -243,7 +243,8 @@ class AuthStore:
         async with self.database.transaction() as conn:
             row = await (
                 await conn.execute(
-                    "SELECT * FROM web_auth_sessions WHERE token_hash=? AND expires>? AND touched>?",
+                    "SELECT * FROM web_auth_sessions "
+                    "WHERE token_hash=? AND expires>? AND touched>?",
                     (digest(token), now, now - IDLE_TTL),
                 )
             ).fetchone()
