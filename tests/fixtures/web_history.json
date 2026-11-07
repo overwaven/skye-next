@@ -1,0 +1,10 @@
+[
+  {"case": "delivery", "items": [{"role":"user","content":"Compare the notes."},{"role":"assistant","content":"PRIVATE_REASONING"},{"type":"function_call","call_id":"a","name":"send_message","arguments":"{\"text\":\"The second note is more specific.\"}"},{"type":"function_call_output","call_id":"a","output":"sent"}], "expected": ["Compare the notes.","The second note is more specific."]},
+  {"case": "fallback-without-receipt", "items": [{"role":"assistant","content":"Unproven fallback reply"}], "expected": []},
+  {"case": "voice", "items": [{"type":"function_call","call_id":"v","name":"send_voice","arguments":"{\"text\":\"Here is your summary.\",\"instructions\":\"PRIVATE_INSTRUCTIONS\"}"},{"type":"function_call_output","call_id":"v","output":"sent"}], "expected": ["Here is your summary."]},
+  {"case": "images-and-files", "items": [{"role":"user","content":[{"type":"input_text","text":"Read this document."},{"type":"input_file","file_data":"PRIVATE_BASE64","filename":"notes.pdf"},{"type":"input_image","image_url":"PRIVATE_URL"}]},{"type":"function_call","call_id":"f","name":"deliver_file","arguments":"{\"filename\":\"out.html\",\"base64_data\":\"PRIVATE_BASE64\"}"},{"type":"function_call_output","call_id":"f","output":"queued"}], "expected": ["Read this document."]},
+  {"case": "empty-project", "items": [], "expected": []},
+  {"case": "old-private", "items": [{"role":"user","content":"Keep this context."}], "expected": ["Keep this context."]},
+  {"case": "group-topic", "items": [{"role":"user","content":"A group-only note."}], "expected": ["A group-only note."]},
+  {"case": "cancelled", "items": [{"type":"function_call","call_id":"c","name":"send_message","arguments":"{\"text\":\"Not delivered\"}"},{"type":"function_call_output","call_id":"c","output":"failed"}], "expected": []}
+]

@@ -93,9 +93,13 @@ billing, and model calls (`model_call` from `ModelCallTransport`) all land in th
 same stream with a `level` and `kind` field. `merge_contextvars` tags every line
 inside a run with `run_id`, `chat_id`, `user_id`, and `thread_id`.
 
-Nothing is mirrored to SQLite: prompts and responses are never stored, so message
-text stays out of the logs — events carry only metadata such as length, tokens,
-duration, and cost. Dozzle detects the JSON automatically, colour-codes levels,
+Operational logs are not mirrored to SQLite, and message text stays out of the logs:
+events carry only metadata such as length, tokens, duration, and cost. Conversation
+replay is stored separately in SQLite by `DatabaseSession` (`agent_messages`); do not
+confuse metadata-only logging with a claim that conversation history is never stored.
+The optional web foundation's retention and migration contracts live in
+`docs/web-foundation.md`; its development lab is not part of the production bootstrap.
+Dozzle detects the JSON automatically, colour-codes levels,
 groups tracebacks, and can query the fields with its built-in SQL engine
 (`SELECT * FROM logs WHERE kind = 'turn'`, `WHERE level = 'error'`).
 
