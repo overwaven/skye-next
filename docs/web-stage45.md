@@ -120,3 +120,24 @@ are logged.
   events immediately.
 - Generated video and audio artifacts are not supported as web playback beyond attached
   files and their stored MIME type.
+
+## Interface refinement (2026-11-07)
+
+Threads can now be deleted completely from the list menu; the delete is transactional,
+refuses active runs and automation targets, and rebinds a project to a replacement thread
+when the deleted row was its selected or initial thread. Thread menus live on sidebar and
+project rows, not inside the open thread.
+
+Projects carry the same emoji as Telegram and can be created from the sidebar or the new
+thread selector. Moving a thread is a submenu, not a dialog. The project selector creates
+a project in place and selects it.
+
+Attachments use the shadcn `Attachment` primitives in the composer and transcript, with a
+thumbnail, full preview, download and remove actions. The picker has grid/list layouts,
+search, type filters, a three-dot action menu per item, click-to-attach, upload progress
+and cancellation.
+
+Tool activity is rendered in the transcript as a collapsible icon list (`1 tool`, `N
+tools`) and remains available after the run completes; the separate run-details dialog was
+removed. Consecutive assistant messages from one run show the “Skye” label once. Route
+changes and tab panels animate, with reduced-motion respected.

@@ -20,9 +20,15 @@ from .access import AccessService
 from .config import Settings
 from .db import Database
 from .library import MediaLibrary
-from .models import Scope
+from .models import Scope, TelegramProject
 from .quota import AllowanceError
 from .runtime import AgentRuntime
+from .telegram_projects import (
+    DEFAULT_EMOJI,
+    MAX_PROJECTS,
+    new_id,
+    parse_standalone_emoji,
+)
 from .threads import ThreadStore
 from .turns import BusyTurn, TurnService
 from .web_auth import (
@@ -39,6 +45,7 @@ from .web_contracts import (
     Capabilities,
     MediaList,
     PreferencesRecord,
+    ProjectCreate,
     ProjectRecord,
     RunDetails,
     SendRequest,
@@ -325,13 +332,55 @@ def create_app(
 
     async def projects(request: web.Request) -> web.Response:
         rows = await database.fetch_all(
-            "SELECT id,name,instructions,revision FROM telegram_projects "
+            "SELECT id,name,emoji,instructions,revision FROM telegram_projects "
             "WHERE user_id=? AND kind='custom' ORDER BY updated_at DESC,id",
             (session(request).user_id,),
         )
         return web.json_response(
             {"projects": [ProjectRecord(**dict(row)).model_dump() for row in rows]}
         )
+
+    async def create_project(request: web.Request) -> web.Response:
+        payload = ProjectCreate.model_validate(await request.json())
+        owner = session(request).user_id
+        emoji = parse_standalone_emoji(payload.emoji)
+        if emoji is None:
+            raise ValueError("Send a single emoji for the project icon")
+        existing = await database.list_telegram_projects(owner)
+        if len([item for item in existing if item.kind == "custom"]) >= MAX_PROJECTS:
+            raise ValueError(f"You can keep up to {MAX_PROJECTS} projects")
+        name = " ".join(payload.name.split())
+        if not 1 <= len(name) <= 64:
+            raise ValueError("Project names must be 1–64 characters")
+        project = await database.create_telegram_project(
+            TelegramProject(
+                id=new_id(),
+                user_id=owner,
+                kind="custom",
+                name=name,
+                emoji=emoji or DEFAULT_EMOJI,
+                instructions=payload.instructions.strip(),
+                openai_conversation_id=None,
+                created_at="",
+                updated_at="",
+            )
+        )
+        await threads.create(owner, project.id, "New thread")
+        await threads.publish_resource(Scope("user", owner), "project", project.id)
+        return web.json_response(
+            ProjectRecord(
+                id=project.id,
+                name=project.name,
+                emoji=project.emoji,
+                instructions=project.instructions,
+                revision=1,
+            ).model_dump(),
+            status=201,
+        )
+
+    async def delete_thread(request: web.Request) -> web.Response:
+        await threads.delete(session(request).user_id, request.match_info["thread_id"])
+        return web.json_response({"deleted": True})
 
     async def list_threads(request: web.Request) -> web.Response:
         records = await threads.list_threads(session(request).user_id)
@@ -635,10 +684,12 @@ def create_app(
     app.router.add_get("/api/v1/capabilities", capabilities)
     app.router.add_get("/api/v1/preferences", preferences)
     app.router.add_get("/api/v1/projects", projects)
+    app.router.add_post("/api/v1/projects", create_project)
     app.router.add_get("/api/v1/threads", list_threads)
     app.router.add_post("/api/v1/threads", create_thread)
     app.router.add_get("/api/v1/threads/{thread_id}", get_thread)
     app.router.add_patch("/api/v1/threads/{thread_id}", update_thread)
+    app.router.add_delete("/api/v1/threads/{thread_id}", delete_thread)
     app.router.add_get("/api/v1/threads/{thread_id}/messages", history)
     app.router.add_get("/api/v1/threads/{thread_id}/state", thread_state)
     app.router.add_get("/api/v1/threads/{thread_id}/events", events_stream)

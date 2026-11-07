@@ -40,8 +40,15 @@ class VisibleMessage(Contract):
 class ProjectRecord(Contract):
     id: str
     name: str = Field(min_length=1, max_length=64)
+    emoji: str = Field(default="", max_length=16)
     instructions: str = Field(max_length=12_000)
     revision: int = Field(ge=1)
+
+
+class ProjectCreate(Contract):
+    name: str = Field(min_length=1, max_length=64)
+    emoji: str = Field(default="☁️", max_length=16)
+    instructions: str = Field(default="", max_length=12_000)
 
 
 class ThreadRecord(Contract):
@@ -230,6 +237,7 @@ class WebContract(Contract):
     """Schema-generation root, not an actual API response."""
 
     project: ProjectRecord
+    project_create: ProjectCreate
     thread: ThreadRecord
     thread_create: ThreadCreate
     thread_update: ThreadUpdate

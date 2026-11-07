@@ -658,6 +658,107 @@ class ThreadStore:
                 thread_id=thread_id,
             )
 
+    async def delete(self, owner: int, thread_id: str) -> None:
+        thread = await self.require(Scope("user", owner), thread_id)
+        async with self.database.transaction() as conn:
+            active = await (
+                await conn.execute(
+                    "SELECT 1 FROM canonical_runs WHERE thread_id=? AND state IN "
+                    "('accepted','running','cancelling')",
+                    (thread_id,),
+                )
+            ).fetchone()
+            if active:
+                raise ValueError("Stop the active request before deleting this thread")
+            automation = await (
+                await conn.execute(
+                    "SELECT 1 FROM automation_thread_bindings WHERE thread_id=?", (thread_id,)
+                )
+            ).fetchone()
+            if automation:
+                raise ValueError("Delete or retarget the automation before deleting its thread")
+            bindings = await (
+                await conn.execute(
+                    "SELECT project_id,initial_thread_id,selected_thread_id "
+                    "FROM telegram_thread_bindings "
+                    "WHERE initial_thread_id=? OR selected_thread_id=?",
+                    (thread_id, thread_id),
+                )
+            ).fetchall()
+            for binding in bindings:
+                replacement = await (
+                    await conn.execute(
+                        "SELECT id FROM threads WHERE project_id=? AND id<>? "
+                        "ORDER BY rowid LIMIT 1",
+                        (binding["project_id"], thread_id),
+                    )
+                ).fetchone()
+                if replacement is None:
+                    replacement_id = await self._insert(
+                        conn,
+                        thread.scope,
+                        str(binding["project_id"]),
+                        "New thread",
+                        f"thread:{uuid4().hex}",
+                    )
+                else:
+                    replacement_id = str(replacement["id"])
+                initial = (
+                    replacement_id
+                    if str(binding["initial_thread_id"]) == thread_id
+                    else binding["initial_thread_id"]
+                )
+                selected = (
+                    replacement_id
+                    if str(binding["selected_thread_id"]) == thread_id
+                    else binding["selected_thread_id"]
+                )
+                await conn.execute(
+                    "UPDATE telegram_thread_bindings SET initial_thread_id=?, "
+                    "selected_thread_id=? WHERE project_id=?",
+                    (initial, selected, binding["project_id"]),
+                )
+            run_ids = [
+                str(row["id"])
+                for row in await (
+                    await conn.execute(
+                        "SELECT id FROM canonical_runs WHERE thread_id=?", (thread_id,)
+                    )
+                ).fetchall()
+            ]
+            if run_ids:
+                placeholders = ",".join("?" for _ in run_ids)
+                for table in (
+                    "run_settlements",
+                    "run_reconciliation",
+                    "run_provider_receipts",
+                    "run_activity",
+                ):
+                    await conn.execute(
+                        f"DELETE FROM {table} WHERE run_id IN ({placeholders})", run_ids
+                    )
+                await conn.execute(
+                    f"DELETE FROM canonical_runs WHERE id IN ({placeholders})", run_ids
+                )
+            await conn.execute(
+                "DELETE FROM canonical_media WHERE message_id IN "
+                "(SELECT id FROM visible_messages WHERE thread_id=?)",
+                (thread_id,),
+            )
+            await conn.execute("DELETE FROM visible_messages WHERE thread_id=?", (thread_id,))
+            await conn.execute("DELETE FROM history_imports WHERE thread_id=?", (thread_id,))
+            await conn.execute("DELETE FROM history_cutovers WHERE thread_id=?", (thread_id,))
+            await conn.execute("DELETE FROM web_events WHERE thread_id=?", (thread_id,))
+            await conn.execute(
+                "DELETE FROM agent_messages WHERE session_id=?", (thread.session_ref,)
+            )
+            await conn.execute(
+                "DELETE FROM conversations WHERE openai_conversation_id=?", (thread.session_ref,)
+            )
+            await conn.execute("DELETE FROM threads WHERE id=?", (thread_id,))
+        if self.events is not None:
+            await self.events.publish_resource(thread.scope, "thread", thread_id)
+
     async def by_session(self, scope: Scope, ref: str) -> Thread:
         row = await self.database.fetch_one(
             "SELECT id FROM threads WHERE scope_kind=? AND scope_id=? AND session_ref=?",

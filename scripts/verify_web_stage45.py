@@ -381,6 +381,39 @@ async def main() -> None:
         assert blocked.status == 400
         report("thread.archived", send_status=blocked.status)
 
+        extra = await client.post(
+            f"{base}/api/v1/threads",
+            headers=write_headers(),
+            json={"title": "Delete me", "project_id": None},
+        )
+        assert extra.status == 201
+        extra_thread = await extra.json()
+        deleted = await client.delete(
+            f"{base}/api/v1/threads/{extra_thread['id']}", headers=write_headers()
+        )
+        assert deleted.status == 200, await deleted.text()
+        missing = await client.get(
+            f"{base}/api/v1/threads/{extra_thread['id']}", headers=headers
+        )
+        assert missing.status == 404
+        report("thread.deleted")
+
+        project = await client.post(
+            f"{base}/api/v1/projects",
+            headers=write_headers(),
+            json={"name": "Web project", "emoji": "🌿", "instructions": "Keep it short"},
+        )
+        assert project.status == 201, await project.text()
+        created_project = await project.json()
+        assert created_project["emoji"] == "🌿"
+        assert created_project["name"] == "Web project"
+        listed = await client.get(f"{base}/api/v1/threads", headers=headers)
+        assert any(
+            item["project_id"] == created_project["id"]
+            for item in (await listed.json())["threads"]
+        )
+        report("project.created", project_id=created_project["id"])
+
     artifact = {
         "version": 1,
         "status": "passed",
