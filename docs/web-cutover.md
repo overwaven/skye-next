@@ -182,7 +182,10 @@ binding are short-lived, stored durably and consumed once. There is no UserInfo 
 refresh flow, username-based linking or browser-supplied account ID.
 
 Verified `profile.id` must belong to an existing Skye account. `(issuer, sub)` is linked
-immutably to that ID; mismatches fail closed. Opaque session tokens are hashed in SQLite,
+immutably to that ID; mismatches fail closed. On a database that predates this work,
+the legacy `web_sessions` table may have a different schema; the new app deliberately
+uses **`web_auth_sessions`** and leaves the old table untouched. `web_identities` and
+`oidc_transactions` are additive. Opaque session tokens are hashed in SQLite,
 rotated at login and capped at 20 per account. Cookies use `__Host-`, Secure, HttpOnly,
 SameSite=Lax and Path=/ without Domain. Idle/absolute expiration is 7/30 days. Bans are
 rechecked on every authenticated request; logout and logout-all revoke server records.

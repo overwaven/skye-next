@@ -200,17 +200,26 @@ def create_app(
 
     async def callback(request: web.Request) -> web.StreamResponse:
         try:
+            stage = "state_validation"
             verifier, nonce = await auth.consume(
                 request.query.get("state", ""), request.cookies.get(LOGIN_COOKIE, "")
             )
+            stage = "provider_response"
             if request.query.get("error") or not request.query.get("code"):
                 raise ValueError("Cancelled login")
+            stage = "token_exchange"
             identity = await provider.exchange(request.query["code"], verifier, nonce)
+            stage = "account_link"
             if await access.banned(identity.user_id):
                 raise PermissionError("Account unavailable")
             owner = await auth.link(identity)
+            stage = "session_issue"
             token = await auth.issue(owner, request.cookies.get(SESSION_COOKIE, ""))
-        except Exception:
+        except Exception as error:
+            # Safe stage/type only: no query, token, claim, account ID or provider body.
+            structlog.get_logger().warning(
+                "oidc_callback_failed", stage=stage, error=type(error).__name__
+            )
             response = web.Response(status=302, headers={"Location": "/login?error=verification"})
             response.del_cookie(LOGIN_COOKIE, path="/", secure=True, httponly=True, samesite="Lax")
             return response
