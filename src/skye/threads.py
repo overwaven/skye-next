@@ -689,7 +689,7 @@ class ThreadStore:
                 replacement = await (
                     await conn.execute(
                         "SELECT id FROM threads WHERE project_id=? AND id<>? "
-                        "ORDER BY rowid LIMIT 1",
+                        "AND archived=0 ORDER BY rowid LIMIT 1",
                         (binding["project_id"], thread_id),
                     )
                 ).fetchone()
