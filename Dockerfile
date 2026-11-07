@@ -25,6 +25,7 @@ RUN --mount=type=cache,target=/root/.cache/uv \
     uv sync --locked --no-dev --no-install-project
 
 COPY src ./src
+COPY scripts ./scripts
 COPY BASE_PROMPT.md ./BASE_PROMPT.md
 RUN --mount=type=cache,target=/root/.cache/uv \
     uv sync --locked --no-dev --no-editable \
