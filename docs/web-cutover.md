@@ -291,7 +291,9 @@ is absent. Delete local credential copies as well. Never commit an env file.
 
 ## Executed evidence
 
-- Python: **586 tests passed**, including migration idempotence, DB/media backup/restore,
+- Python: **422 tests passed** after intentionally deleting 164 low-signal tests
+  (constants, copy, trivial mappings and mock-order assertions) under the testing policy.
+  Remaining coverage includes migration idempotence, DB/media backup/restore,
   group exclusion/reset, default-only instructions, cutover-bounded backfill, opaque media
   receipts, partial-send receipts, allowlisted/bounded activity, pinned automation firing,
   durable run deduplication, cancellation, delivery-gated and exactly-once settlement,

@@ -674,7 +674,8 @@ Dependencies: Stage 2 ownership model; incorporate Stage 0 OIDC spike.
 - [x] Test wrong claims, replay, stale state, bad callbacks, missing profile ID, unknown key,
       account mismatch, expired/revoked session and cross-user requests.
 
-Evidence: 586 Python tests, 33 foundation browser tests, plus synthetic two-account
+Evidence: 422 Python tests (164 low-signal tests intentionally removed), 33 foundation
+browser tests with HTML/JSON artifacts, plus synthetic two-account
 Next.js → Python read-only rendering/axe/logout checks in all three browser engines.
 **One real existing Telegram account passed live OIDC** signature, issuer, audience,
 nonce, canonical decimal-string `id` and existing-account checks through the registered
