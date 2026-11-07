@@ -312,7 +312,7 @@ is absent. Delete local credential copies as well. Never commit an env file.
 - **Live cutover:** the actual volume was backed up and migrated, then served through
   the new web container. Counts and checks are above; this supersedes the copy-only
   rehearsal statement.
-- Web: **33 foundation browser tests passed** across Chromium/Firefox/WebKit. Axe waits
+- Web: **39 foundation browser tests passed** across Chromium/Firefox/WebKit. Axe waits
   for settled overlays; fading text was an audit timing artifact, not a reason to disable
   contrast checks. Python Ruff, strict mypy (50 files), TypeScript, contracts and
   production build are checked separately.

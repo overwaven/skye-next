@@ -630,7 +630,7 @@ Dependencies: Stage 0 scope decisions; can use fixtures while shared backend wor
 - [x] Inspect screenshots at 1440/768/390 plus 320px/zoom, keyboard/focus and reduced motion.
 
 Evidence: `web/DESIGN.md` and `web/docs/foundation-verification.md`. Browser suite:
-33 passed across Chromium/Firefox/WebKit; production build and fixture gates pass.
+39 passed across Chromium/Firefox/WebKit; production build and fixture gates pass.
 Python regression suite: 538 passed. Baseline carousel lint failure and npm audit findings
 remain disclosed. This stage is a disconnected shell, not working chat/resource CRUD.
 
@@ -674,7 +674,7 @@ Dependencies: Stage 2 ownership model; incorporate Stage 0 OIDC spike.
 - [x] Test wrong claims, replay, stale state, bad callbacks, missing profile ID, unknown key,
       account mismatch, expired/revoked session and cross-user requests.
 
-Evidence: 422 Python tests (164 low-signal tests intentionally removed), 33 foundation
+Evidence: 422 Python tests (164 low-signal tests intentionally removed), 39 foundation
 browser tests with HTML/JSON artifacts, plus synthetic two-account
 Next.js → Python read-only rendering/axe/logout checks in all three browser engines.
 **One real existing Telegram account passed live OIDC** signature, issuer, audience,
