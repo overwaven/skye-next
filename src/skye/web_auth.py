@@ -33,11 +33,11 @@ CREATE TABLE IF NOT EXISTS web_identities (
     issuer TEXT NOT NULL, subject TEXT NOT NULL, user_id INTEGER NOT NULL,
     PRIMARY KEY(issuer, subject), UNIQUE(issuer, user_id)
 );
-CREATE TABLE IF NOT EXISTS web_sessions (
+CREATE TABLE IF NOT EXISTS web_auth_sessions (
     token_hash TEXT PRIMARY KEY, user_id INTEGER NOT NULL,
     csrf TEXT NOT NULL, created REAL NOT NULL, touched REAL NOT NULL, expires REAL NOT NULL
 );
-CREATE INDEX IF NOT EXISTS web_sessions_owner ON web_sessions(user_id);
+CREATE INDEX IF NOT EXISTS web_auth_sessions_owner ON web_auth_sessions(user_id);
 """
 
 
@@ -220,18 +220,18 @@ class AuthStore:
         token, csrf, now = secrets.token_urlsafe(32), secrets.token_urlsafe(32), time.time()
         async with self.database.transaction() as conn:
             await conn.execute(
-                "DELETE FROM web_sessions WHERE token_hash=? OR expires<=? OR touched<=?",
+                "DELETE FROM web_auth_sessions WHERE token_hash=? OR expires<=? OR touched<=?",
                 (digest(previous), now, now - IDLE_TTL),
             )
             # Bound device sessions without retaining IPs or user-agent strings.
             await conn.execute(
-                "DELETE FROM web_sessions WHERE user_id=? AND token_hash NOT IN "
-                "(SELECT token_hash FROM web_sessions WHERE user_id=? "
+                "DELETE FROM web_auth_sessions WHERE user_id=? AND token_hash NOT IN "
+                "(SELECT token_hash FROM web_auth_sessions WHERE user_id=? "
                 "ORDER BY created DESC LIMIT 19)",
                 (user_id, user_id),
             )
             await conn.execute(
-                "INSERT INTO web_sessions VALUES(?,?,?,?,?,?)",
+                "INSERT INTO web_auth_sessions VALUES(?,?,?,?,?,?)",
                 (digest(token), user_id, csrf, now, now, now + ABSOLUTE_TTL),
             )
         return token
@@ -243,23 +243,24 @@ class AuthStore:
         async with self.database.transaction() as conn:
             row = await (
                 await conn.execute(
-                    "SELECT * FROM web_sessions WHERE token_hash=? AND expires>? AND touched>?",
+                    "SELECT * FROM web_auth_sessions WHERE token_hash=? AND expires>? AND touched>?",
                     (digest(token), now, now - IDLE_TTL),
                 )
             ).fetchone()
             if row is None:
                 return None
             await conn.execute(
-                "UPDATE web_sessions SET touched=? WHERE token_hash=?", (now, row["token_hash"])
+                "UPDATE web_auth_sessions SET touched=? WHERE token_hash=?",
+                (now, row["token_hash"]),
             )
         return Session(str(row["token_hash"]), int(row["user_id"]), str(row["csrf"]))
 
     async def revoke(self, session: Session, *, all_devices: bool = False) -> None:
         if all_devices:
             await self.database.execute_write(
-                "DELETE FROM web_sessions WHERE user_id=?", (session.user_id,)
+                "DELETE FROM web_auth_sessions WHERE user_id=?", (session.user_id,)
             )
         else:
             await self.database.execute_write(
-                "DELETE FROM web_sessions WHERE token_hash=?", (session.token_hash,)
+                "DELETE FROM web_auth_sessions WHERE token_hash=?", (session.token_hash,)
             )

@@ -147,14 +147,14 @@ async def test_internal_origin_requires_separate_secret_and_still_requires_user_
 async def test_hashed_session_idle_absolute_expiry_and_login_rotation(database):
     store = AuthStore(database)
     token = await store.issue(1)
-    row = await database.fetch_one("SELECT * FROM web_sessions")
+    row = await database.fetch_one("SELECT * FROM web_auth_sessions")
     assert token not in tuple(row)
     assert row["token_hash"] == digest(token)
-    await database.execute_write("UPDATE web_sessions SET touched=0")
+    await database.execute_write("UPDATE web_auth_sessions SET touched=0")
     assert await store.session(token) is None
     replacement = await store.issue(1, token)
     assert await store.session(token) is None
-    await database.execute_write("UPDATE web_sessions SET expires=0")
+    await database.execute_write("UPDATE web_auth_sessions SET expires=0")
     assert await store.session(replacement) is None
 
 
