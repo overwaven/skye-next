@@ -141,3 +141,6 @@ Tool activity is rendered in the transcript as a collapsible icon list (`1 tool`
 tools`) and remains available after the run completes; the separate run-details dialog was
 removed. Consecutive assistant messages from one run show the “Skye” label once. Route
 changes and tab panels animate, with reduced-motion respected.
+Thread tool activity is loaded per run: the latest run streams live, and earlier runs in
+the visible history are fetched from the owner-scoped run endpoint so their collapsible
+tool blocks remain in place after reload (within the 24-hour activity retention window).
