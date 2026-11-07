@@ -228,6 +228,43 @@ uv run python scripts/reconcile_run.py --database /path/to/skye.db \
 `cost-milli` is the retail wallet charge; provider cost is optional. This workflow still
 needs an actual-provider exercise. Provider references/usage are not exposed by the API.
 
+## Production cutover record (2026-11-07)
+
+Performed on the owner's server with explicit downtime approval:
+
+1. Built `skye-next:prod` and `skye-web:prod`, then stopped only `skye-next`.
+2. Took a fresh SQLite online backup plus media copy inside the data volume, and
+   copied it to root-only `/root/skye-next-backups/20261107-live-cutover` (190 MB).
+3. Migrated the live volume with the new image. Result: 13 private project/default
+   threads, 5 group bindings, 28 allowlisted historical messages, 2 wallets untouched,
+   integrity and foreign keys clean. The bot/database were not touched before this
+   point; a second migration run on copies imported zero.
+4. Replaced only the managed `chat.skye-bot.com` Caddy block. `/auth/callback` and
+   `/api/v1/*` go to Python on **127.0.0.1:8090**; other UI routes go to the web
+   container on **127.0.0.1:18780**. The Streamlit `/beta` route is unchanged.
+   Client-supplied `X-Skye-Internal-Token` is stripped at the proxy.
+5. Started `skye` and `web` from compose. Both healthy; `web_started` and polling
+   appear in structured logs. Fresh OIDC start uses the registered `/auth/callback`,
+   PKCE S256, nonce and a Secure `__Host-skye_login` cookie.
+
+Rollback while retaining compatible data:
+
+```bash
+cd /root/skye-next
+docker compose stop web skye
+# Restore Caddy from the managed backup only if no later edits exist:
+#   cp /root/skye-next-backups/20261107-cutover/Caddyfile /etc/caddy/Caddyfile
+#   systemctl reload caddy
+# If no new post-cutover writes occurred, restore the complete DB/media backup
+# to the volume while stopped. Never overwrite newer wallet/transcript data with
+# a stale backup; see the migration section.
+docker compose up -d skye
+```
+
+The old static UI release remains under `/var/www/chat.skye-bot.com/releases`; it is
+not served while the new Caddy block is active. The old bot image was replaced by the
+rebuild; rebuilding commit `1d8b7e3` is the code-level rollback path.
+
 ## Temporary verification cleanup
 
 The live check used an isolated root-owned service and two Caddy routes. After the second

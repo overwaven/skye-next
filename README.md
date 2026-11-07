@@ -102,13 +102,18 @@ To work on the code itself, skip Docker: `uv sync`, then `uv run skye`.
 
 One caution before you enable the sandbox: the compose file mounts `/var/run/docker.sock` so the bot can spawn one container per command, and that is root-equivalent on the host. It is off by default, and so is sandbox network egress.
 
-## Optional web client development
+## Web client
 
-The separate `web/` checkout contains the Next.js interface and an opt-in, read-only
-account path. Canonical threads and the Python HTTP API are disabled by default and
-require an explicit backed-up migration. Web sending, uploads, payments and resource
-edits are not enabled. Real Telegram OIDC verification and production acceptance remain
-open gates; this is not a ready-to-enable public deployment.
+The separate `web/` checkout contains the Next.js interface. It is deployed read-only at
+<https://chat.skye-bot.com>: Telegram OIDC signs in an existing account, projects/threads
+and confirmed transcript deliveries are visible, and sign-out/revoke-all work. Web sending,
+uploads, payments, resource edits and streams are not enabled. Canonical threads and the
+HTTP API remain default-off in source and require a backed-up migration.
+
+The live cutover on 2026-11-07 passed one real account. The two-real-account isolation
+exit gate could not be completed because the owner has only one Telegram account; synthetic
+two-account browser tests cover the code path instead. See the cutover record for backup,
+rollback and temporary-lab cleanup.
 
 See [cutover and verification](docs/web-cutover.md), [foundation decisions](docs/web-foundation.md)
 and [web development](web/README.md). No second database writer or scheduler is introduced.
