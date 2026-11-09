@@ -10,7 +10,8 @@ near-black primary, brand color almost entirely confined to Skye's actual mark.
 The existing mark's gradient is an existing-brand asset exception, not a UI motif.
 
 **Idea:** Skye's one conversation with shared memory becomes a quiet conversation
-canvas with an inspectable context edge. Context stays closed until requested.
+canvas. Chat management lives in a dedicated Chats view, and personal resources live
+in the Library rather than a side panel.
 **Face:** a nearly-white cool ground, Skye's real mark, and the familiar short voice.
 **Signature:** Context distinguishes project instructions from personal resources and
 eventually available resources from actual per-run use. It is not a decorative sidebar.
@@ -24,7 +25,8 @@ eventually available resources from actual per-run use. It is not a decorative s
 - Account-wide resources are not project-private. Each thread has its own transcript.
 - Main job: write and resume a thread; second job: inspect the context behind a reply.
 - People use Skye for small questions and prolonged work, on desktop and on a phone.
-- Broad library functions get routes; the current work gets a context pane/editor.
+- Broad chat and library functions get routes; the current work stays in the conversation.
+- Chats can be pinned, filtered by project and managed in multi-select.
 - Navigation and open popovers are local view state, not synchronized Telegram selection.
 - Preview data is synthetic: “Skye, on the web”, “A quieter week” and four short threads.
   Labels and server environment gates distinguish it from real personal account data.
@@ -34,6 +36,7 @@ eventually available resources from actual per-run use. It is not a decorative s
 | Surface | Question |
 | --- | --- |
 | Chat | Where did we leave off, and what is Skye doing? |
+| Chats | Which conversations exist, and how do I organise them? |
 | Project | Which conversations belong to this work? |
 | Memory | What does Skye remember, and where does it apply? |
 | Connectors | Which apps can Skye use, and which need attention? |
@@ -67,9 +70,9 @@ Reuse `base-luma`, Base UI, Hugeicons and the installed Geist faces. No preset r
 ## Geometry and primitives
 
 At 1440px: 256px navigation + 1184px canvas = 1440. Conversation max 736px, composer
-max 800px including equal 32px gutters. Context uses 352px from that canvas only above
-1200px; no invisible overlay covers the conversation. At tablet widths navigation folds
-before it starves the conversation. Phone: one region, 16–20px gutters, bottom-safe composer.
+max 800px including equal 32px gutters. The conversation uses the full canvas; there is
+no secondary details rail. At tablet widths navigation folds before it starves the
+conversation. Phone: one region, 16–20px gutters, bottom-safe composer.
 
 Prefer installed Sidebar, MessageScroller, Message/Bubble, Field/InputGroup, Trace,
 Dialog, Sheet, Tabs, Command, Empty, Skeleton, Spinner and Buttons. Domain compositions

@@ -20,6 +20,7 @@ from .runtime import (
     AgentRuntime,
     RunEvent,
     RunOutput,
+    display_tool_name,
     leftover_reply,
     safe_tool_label,
 )
@@ -213,8 +214,11 @@ class WebTurnRunner:
                 )
                 category = "voice"
             else:
-                label = safe_tool_label(event.tool_name)
+                label = event.tool_label or safe_tool_label(event.tool_name)
                 category = activity_category(event.tool_name)
+            tool_name = (
+                "" if event.kind == "activity" else display_tool_name(event.tool_name)
+            )
             status = {"done": "completed", "error": "failed"}.get(
                 event.tool_status, event.tool_status
             )
@@ -227,6 +231,9 @@ class WebTurnRunner:
                 status,
                 label=label,
                 tool_id=event.tool_id or event.tool_name,
+                tool_name=tool_name,
+                tool_args=event.tool_args,
+                tool_output=event.tool_output,
             )
             if event.tool_name in {"remember", "forget"} and status == "completed":
                 await self.threads.publish_resource(context.scope, "memory", thread.record.id)

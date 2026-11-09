@@ -114,9 +114,24 @@
           "title": "Status",
           "type": "string"
         },
+        "tool_args": {
+          "default": "",
+          "title": "Tool Args",
+          "type": "string"
+        },
         "tool_id": {
           "default": "",
           "title": "Tool Id",
+          "type": "string"
+        },
+        "tool_name": {
+          "default": "",
+          "title": "Tool Name",
+          "type": "string"
+        },
+        "tool_output": {
+          "default": "",
+          "title": "Tool Output",
           "type": "string"
         }
       },
@@ -1245,6 +1260,16 @@
           "title": "Id",
           "type": "string"
         },
+        "pinned": {
+          "default": false,
+          "title": "Pinned",
+          "type": "boolean"
+        },
+        "preview": {
+          "default": "",
+          "title": "Preview",
+          "type": "string"
+        },
         "project_id": {
           "anyOf": [
             {
@@ -1289,6 +1314,18 @@
           ],
           "default": null,
           "title": "Archived"
+        },
+        "pinned": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Pinned"
         },
         "project_id": {
           "anyOf": [

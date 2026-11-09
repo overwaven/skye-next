@@ -80,10 +80,26 @@ class DemoRuntime:
     ) -> RunOutput:
         text = str(user_input).lower()
         event, reply = kwargs.get("on_event"), kwargs.get("on_reply")
-        tools = [("web_search", "Searching the web", "Searched the web")]
+        tools = [
+            (
+                "web_search",
+                "Searching the web",
+                "Searched the web",
+                '{"query":"weekly planning"}',
+                "Found 4 short references.",
+            )
+        ]
         if any(word in text for word in ("code", "python", "calculate")):
-            tools.append(("execute_code", "Running code", "Ran code"))
-        for name, working, done in tools:
+            tools.append(
+                (
+                    "execute_code",
+                    "Running code",
+                    "Ran code",
+                    '{"code":"print(2 + 2)"}',
+                    "4",
+                )
+            )
+        for name, working, done, arguments, output in tools:
             tool_id = uuid4().hex
             if event:
                 await event(
@@ -93,6 +109,7 @@ class DemoRuntime:
                         tool_name=name,
                         tool_label=working,
                         tool_status="running",
+                        tool_args=arguments,
                     )
                 )
             await asyncio.sleep(1.2)
@@ -104,6 +121,7 @@ class DemoRuntime:
                         tool_name=name,
                         tool_label=done,
                         tool_status="done",
+                        tool_output=output,
                     )
                 )
         if "demo error" in text:

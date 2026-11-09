@@ -292,7 +292,17 @@ async def test_run_activity_and_cost_details_are_owner_scoped(database, aiohttp_
     )
 
     async def operation(admission, run_id):
-        await store.record_activity(Scope("user", 1), run_id, "web", "completed")
+        await store.record_activity(
+            Scope("user", 1),
+            run_id,
+            "web",
+            "completed",
+            label="Searched the web",
+            tool_id="call_1",
+            tool_name="web search",
+            tool_args='{"query":"skye"}',
+            tool_output="Found the answer",
+        )
         await turns.record_provider_receipt(run_id, "private-provider-reference")
         return RunOutput("", (), usage_tokens=1)
 
@@ -306,6 +316,9 @@ async def test_run_activity_and_cost_details_are_owner_scoped(database, aiohttp_
     assert response.status == 200
     body = await response.json()
     assert body["activities"][0]["category"] == "web"
+    assert body["activities"][0]["tool_name"] == "web search"
+    assert body["activities"][0]["tool_args"] == '{"query":"skye"}'
+    assert body["activities"][0]["tool_output"] == "Found the answer"
     assert body["delivery_state"] == "complete"
     assert body["run"]["cost_state"] == "settled"
     assert "private-provider-reference" not in json.dumps(body)
@@ -343,3 +356,39 @@ def test_verified_identity_uses_profile_id_and_rejects_wrong_signing_key():
         token = jwt.encode({"alg": "RS256", "kid": "current"}, incomplete, key)
         with pytest.raises(JoseError):
             verify_identity(token, keys, "client", "nonce")
+
+
+async def test_thread_pin_and_project_delete_keep_threads(database, aiohttp_client):
+    client = await aiohttp_client(application(database))
+    alice = await headers(database, 1)
+    threads = (await (await client.get("/api/v1/threads", headers=alice)).json())[
+        "threads"
+    ]
+    thread_id = threads[0]["id"]
+    pinned = await client.patch(
+        f"/api/v1/threads/{thread_id}", headers=alice, json={"pinned": True}
+    )
+    assert pinned.status == 200
+    assert (await pinned.json())["pinned"] is True
+    ordered = (await (await client.get("/api/v1/threads", headers=alice)).json())[
+        "threads"
+    ]
+    assert ordered[0]["id"] == thread_id
+
+    projects = (await (await client.get("/api/v1/projects", headers=alice)).json())[
+        "projects"
+    ]
+    project_id = projects[0]["id"]
+    deleted = await client.delete(f"/api/v1/projects/{project_id}", headers=alice)
+    assert deleted.status == 200
+    assert (
+        await client.get(f"/api/v1/projects/{project_id}", headers=alice)
+    ).status in {404, 405}
+    remaining = (await (await client.get("/api/v1/threads", headers=alice)).json())[
+        "threads"
+    ]
+    assert len(remaining) == len(ordered)
+    assert all(
+        item["project_id"] != project_id for item in remaining
+    )
+    assert (await client.delete(f"/api/v1/projects/{project_id}", headers=alice)).status == 404

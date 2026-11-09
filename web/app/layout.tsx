@@ -3,6 +3,7 @@ import { Geist, Geist_Mono } from "next/font/google"
 import "./globals.css"
 import { ThemeProvider } from "@/components/theme-provider"
 import { ServiceWorkerReset } from "@/components/service-worker-reset"
+import { Toaster } from "@/components/ui/toast"
 import { cn } from "@/lib/utils"
 import type { Metadata, Viewport } from "next"
 
@@ -43,7 +44,9 @@ export default function RootLayout({
     >
       <body>
         <ServiceWorkerReset />
-        <ThemeProvider>{children}</ThemeProvider>
+        <ThemeProvider>
+          <Toaster>{children}</Toaster>
+        </ThemeProvider>
       </body>
     </html>
   )

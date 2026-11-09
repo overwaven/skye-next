@@ -322,6 +322,7 @@ export function MemoryResource({
   } = useResourceActions(refresh)
   const [query, setQuery] = useState("")
   const [category, setCategory] = useState<MemoryCategory | "all">("all")
+  const [categoryOpen, setCategoryOpen] = useState(false)
   const [addOpen, setAddOpen] = useState(false)
   const [remove, setRemove] = useState<MemoryRecord | null>(null)
 
@@ -429,7 +430,7 @@ export function MemoryResource({
           placeholder="Search memory"
           className="sm:max-w-sm"
         />
-        <DropdownMenu>
+        <DropdownMenu open={categoryOpen} onOpenChange={setCategoryOpen}>
           <DropdownMenuTrigger
             render={
               <Button
@@ -453,9 +454,10 @@ export function MemoryResource({
             <DropdownMenuGroup>
               <DropdownMenuRadioGroup
                 value={category}
-                onValueChange={(value) =>
+                onValueChange={(value) => {
                   setCategory(value as MemoryCategory | "all")
-                }
+                  setCategoryOpen(false)
+                }}
               >
                 <DropdownMenuRadioItem value="all">
                   All categories

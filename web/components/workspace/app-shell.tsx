@@ -16,6 +16,7 @@ import {
   ArrowRight01Icon,
   Cancel01Icon,
   Folder01Icon,
+  PinIcon,
   BrainIcon,
   Plug01Icon,
   SparklesIcon,
@@ -86,6 +87,39 @@ function Navigation({ data }: { data: NavigationData }) {
     setSearchOpen(false)
     setOpenMobile(false)
     router.push(href)
+  }
+
+  const pinnedThreads = data.threads.filter((thread) => thread.pinned)
+  const recentThreads = data.threads
+    .filter((thread) => !thread.pinned)
+    .slice(0, 8)
+
+  function threadItem(thread: NavigationData["threads"][number]) {
+    return (
+      <SidebarMenuItem key={thread.id} className="relative">
+        <SidebarMenuButton
+          render={<Link href={`/chat/${thread.id}`} />}
+          onClick={() => setOpenMobile(false)}
+          isActive={pathname === `/chat/${thread.id}`}
+          className="pe-10"
+        >
+          <HugeiconsIcon icon={thread.pinned ? PinIcon : Message01Icon} />
+          <span>{thread.title}</span>
+        </SidebarMenuButton>
+        {data.accountConnected && data.csrfToken && (
+          <div className="absolute end-1 top-1/2 -translate-y-1/2">
+            <ThreadMenu
+              thread={thread}
+              projects={data.projects}
+              csrfToken={data.csrfToken}
+              onDeleted={() => {
+                if (pathname === `/chat/${thread.id}`) router.push("/chat")
+              }}
+            />
+          </div>
+        )}
+      </SidebarMenuItem>
+    )
   }
 
   const libraryIcons = {
@@ -257,37 +291,31 @@ function Navigation({ data }: { data: NavigationData }) {
             ))}
           </SidebarMenu>
         </SidebarGroup>
+        {pinnedThreads.length > 0 && (
+          <SidebarGroup>
+            <SidebarGroupLabel>Pinned</SidebarGroupLabel>
+            <SidebarMenu>{pinnedThreads.map(threadItem)}</SidebarMenu>
+          </SidebarGroup>
+        )}
         <SidebarGroup>
-          <SidebarGroupLabel>Recent threads</SidebarGroupLabel>
-          <SidebarMenu>
-            {data.threads.map((thread) => (
-              <SidebarMenuItem key={thread.id} className="relative">
-                <SidebarMenuButton
-                  render={<Link href={`/chat/${thread.id}`} />}
-                  onClick={() => setOpenMobile(false)}
-                  isActive={pathname === `/chat/${thread.id}`}
-                  className="pe-10"
-                >
-                  <HugeiconsIcon icon={Message01Icon} />
-                  <span>{thread.title}</span>
-                </SidebarMenuButton>
-                {data.accountConnected && data.csrfToken && (
-                  <div className="absolute end-1 top-1/2 -translate-y-1/2">
-                    <ThreadMenu
-                      thread={thread}
-                      projects={data.projects}
-                      csrfToken={data.csrfToken}
-                      onDeleted={() => {
-                        if (pathname === `/chat/${thread.id}`)
-                          router.push("/chat")
-                      }}
-                    />
-                  </div>
-                )}
-              </SidebarMenuItem>
-            ))}
-          </SidebarMenu>
+          <SidebarGroupLabel
+            render={<Link href="/chats" />}
+            onClick={() => setOpenMobile(false)}
+            className="group/recent justify-between hover:text-sidebar-foreground"
+          >
+            Recent threads
+            <HugeiconsIcon
+              icon={ArrowRight01Icon}
+              className="opacity-60 transition-opacity group-hover/recent:opacity-100"
+            />
+          </SidebarGroupLabel>
+          <SidebarMenu>{recentThreads.map(threadItem)}</SidebarMenu>
         </SidebarGroup>
+        {recentThreads.length === 0 && pinnedThreads.length === 0 && (
+          <p className="px-3 pb-2 text-sm text-muted-foreground">
+            No threads yet.
+          </p>
+        )}
       </SidebarContent>
       <SidebarFooter className="gap-3 p-4">
         {data.localPreview && (

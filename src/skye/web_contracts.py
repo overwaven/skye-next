@@ -60,6 +60,8 @@ class ThreadRecord(Contract):
     project_id: str | None
     title: str
     archived: bool = False
+    pinned: bool = False
+    preview: str = ""
     revision: int = Field(ge=1)
 
 
@@ -72,6 +74,7 @@ class ThreadUpdate(Contract):
     title: str | None = Field(default=None, min_length=1, max_length=128)
     project_id: str | None = None
     archived: bool | None = None
+    pinned: bool | None = None
 
 
 class SessionRecord(Contract):
@@ -190,6 +193,9 @@ class ActivityRecord(Contract):
     status: Literal["running", "completed", "failed"]
     label: str = ""
     tool_id: str = ""
+    tool_name: str = ""
+    tool_args: str = ""
+    tool_output: str = ""
 
 
 class RunEvent(Contract):

@@ -2,24 +2,22 @@
 
 import * as React from "react"
 import { HugeiconsIcon } from "@hugeicons/react"
-import { Mic01Icon, Square01Icon } from "@hugeicons/core-free-icons"
-import { Button } from "@/components/ui/button"
+import { Mic01Icon, StopIcon } from "@hugeicons/core-free-icons"
 import { InputGroupButton } from "@/components/ui/input-group"
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from "@/components/ui/dialog"
-import { Field, FieldLabel } from "@/components/ui/field"
-import { Textarea } from "@/components/ui/textarea"
 import { Spinner } from "@/components/ui/spinner"
-import type { MediaRecord } from "@/lib/contracts.generated"
+import { toast } from "@/components/ui/toast"
 
 function clock(seconds: number) {
   return `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, "0")}`
+}
+
+function recordingError(description: string) {
+  toast.add({
+    title: "Recording failed",
+    description,
+    type: "error",
+    timeout: 6000,
+  })
 }
 
 export function VoiceRecorder({
@@ -29,21 +27,16 @@ export function VoiceRecorder({
 }: {
   csrfToken: string
   disabled?: boolean
-  onReady: (text: string, media: MediaRecord) => void
+  onReady: (text: string) => void
 }) {
   const [recording, setRecording] = React.useState(false)
   const [seconds, setSeconds] = React.useState(0)
   const [busy, setBusy] = React.useState(false)
-  const [error, setError] = React.useState("")
-  const [review, setReview] = React.useState<{
-    text: string
-    media: MediaRecord
-    url: string
-  } | null>(null)
   const recorder = React.useRef<MediaRecorder | null>(null)
   const stream = React.useRef<MediaStream | null>(null)
   const chunks = React.useRef<Blob[]>([])
   const timer = React.useRef<ReturnType<typeof setInterval> | null>(null)
+  const unmounted = React.useRef(false)
 
   function cleanup() {
     if (timer.current) clearInterval(timer.current)
@@ -55,16 +48,17 @@ export function VoiceRecorder({
   }
 
   React.useEffect(() => {
+    unmounted.current = false
     return () => {
+      unmounted.current = true
       recorder.current?.stop()
       cleanup()
     }
   }, [])
 
   async function start() {
-    setError("")
     if (!navigator.mediaDevices?.getUserMedia || !window.MediaRecorder) {
-      setError("Recording is not supported in this browser.")
+      recordingError("Recording is not supported in this browser.")
       return
     }
     try {
@@ -85,7 +79,8 @@ export function VoiceRecorder({
         if (event.data.size) chunks.current.push(event.data)
       }
       next.onstop = () => {
-        void transcribe(new Blob(chunks.current, { type: next.mimeType }))
+        if (!unmounted.current)
+          void transcribe(new Blob(chunks.current, { type: next.mimeType }))
       }
       next.start()
       setRecording(true)
@@ -101,7 +96,7 @@ export function VoiceRecorder({
       }, 1000)
     } catch {
       cleanup()
-      setError("Microphone access is blocked. Allow it or type instead.")
+      recordingError("Microphone access is blocked. Allow it or type instead.")
     }
   }
 
@@ -120,111 +115,60 @@ export function VoiceRecorder({
         body: blob,
       })
       if (!response.ok) {
-        setError(
+        recordingError(
           response.status === 429
-            ? "Too many recordings. Wait a minute."
+            ? "Too many recordings. Wait a minute and try again."
             : "That recording could not be transcribed. Try again."
         )
         return
       }
       const data = (await response.json()) as {
         text: string
-        media: MediaRecord
+        media?: { id: string }
       }
-      setReview({
-        text: data.text,
-        media: data.media,
-        url: URL.createObjectURL(blob),
-      })
+      if (unmounted.current) return
+      if (data.media?.id) {
+        void fetch(`/api/v1/media/${encodeURIComponent(data.media.id)}`, {
+          method: "DELETE",
+          headers: { "X-CSRF-Token": csrfToken },
+        }).catch(() => undefined)
+      }
+      const text = data.text.trim()
+      if (!text) {
+        toast.add({
+          title: "Nothing recorded",
+          description: "Skye could not hear any speech. Try again.",
+          type: "info",
+        })
+        return
+      }
+      onReady(text)
     } catch {
-      setError("The recording could not be uploaded. Try again.")
+      if (!unmounted.current)
+        recordingError("The recording could not be uploaded. Try again.")
     } finally {
-      setBusy(false)
+      if (!unmounted.current) setBusy(false)
     }
   }
 
-  function discard() {
-    if (review) URL.revokeObjectURL(review.url)
-    setReview(null)
-  }
-
-  return (
-    <>
-      {recording ? (
-        <InputGroupButton
-          size="sm"
-          variant="destructive"
-          aria-label="Stop recording"
-          onClick={() => recorder.current?.stop()}
-        >
-          <HugeiconsIcon icon={Square01Icon} data-icon="inline-start" />
-          {clock(seconds)}
-        </InputGroupButton>
-      ) : (
-        <InputGroupButton
-          size="icon-sm"
-          aria-label="Record a voice message"
-          disabled={disabled || busy}
-          onClick={() => void start()}
-        >
-          {busy ? <Spinner /> : <HugeiconsIcon icon={Mic01Icon} />}
-        </InputGroupButton>
-      )}
-      {error && (
-        <span role="alert" className="text-xs text-destructive">
-          {error}
-        </span>
-      )}
-      <Dialog
-        open={review !== null}
-        onOpenChange={(open) => {
-          if (!open) discard()
-        }}
-      >
-        <DialogContent>
-          <DialogHeader>
-            <DialogTitle>Recording</DialogTitle>
-            <DialogDescription>
-              Check the transcript before attaching it.
-            </DialogDescription>
-          </DialogHeader>
-          {review && (
-            <>
-              <audio
-                controls
-                src={review.url}
-                className="w-full"
-                aria-label="Recorded audio"
-              />
-              <Field>
-                <FieldLabel htmlFor="voice-transcript">Transcript</FieldLabel>
-                <Textarea
-                  id="voice-transcript"
-                  rows={4}
-                  value={review.text}
-                  onChange={(event) =>
-                    setReview({ ...review, text: event.target.value })
-                  }
-                />
-              </Field>
-              <DialogFooter>
-                <Button variant="outline" onClick={discard}>
-                  Discard
-                </Button>
-                <Button
-                  disabled={!review.text.trim()}
-                  onClick={() => {
-                    onReady(review.text.trim(), review.media)
-                    discard()
-                  }}
-                >
-                  Attach
-                </Button>
-              </DialogFooter>
-            </>
-          )}
-        </DialogContent>
-      </Dialog>
-    </>
+  return recording ? (
+    <InputGroupButton
+      size="sm"
+      variant="destructive"
+      aria-label="Stop recording"
+      onClick={() => recorder.current?.stop()}
+    >
+      <HugeiconsIcon icon={StopIcon} data-icon="inline-start" />
+      {clock(seconds)}
+    </InputGroupButton>
+  ) : (
+    <InputGroupButton
+      size="icon-sm"
+      aria-label="Record a voice message"
+      disabled={disabled || busy}
+      onClick={() => void start()}
+    >
+      {busy ? <Spinner /> : <HugeiconsIcon icon={Mic01Icon} />}
+    </InputGroupButton>
   )
 }

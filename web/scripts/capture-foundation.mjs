@@ -7,8 +7,6 @@ const browser = await chromium.launch()
 const evidence = []
 const cases = [
   { name: "empty-desktop", path: "/chat", width: 1440 },
-  { name: "context-desktop", path: "/chat/a-place-to-think", width: 1440, action: "context" },
-  { name: "context-mobile", path: "/chat/a-place-to-think", width: 390, action: "context" },
   { name: "project-desktop", path: "/projects/skye-web", width: 1440 },
   { name: "memory-desktop", path: "/library/memory", width: 1440 },
   { name: "memory-mobile", path: "/library/memory", width: 390 },
@@ -31,14 +29,6 @@ for (const item of cases) {
   await page.locator('[data-hydrated="true"]').waitFor()
   await page.getByRole("heading", { level: 1 }).waitFor()
   await page.evaluate(() => document.fonts.ready)
-  if (action === "context") {
-    await page.getByRole("button", { name: "Context", exact: true }).click()
-    await page.getByRole("heading", { name: "Thread context" }).waitFor()
-    if (width < 1200) {
-      await page.locator('[data-slot="sheet-content"]:not([data-starting-style])').waitFor()
-      await expect(page.getByRole("dialog")).toHaveCSS("opacity", "1")
-    }
-  }
   if (action === "search") {
     await page.keyboard.press("Control+k")
     await expect(page.getByRole("dialog", { name: "Search" })).toBeVisible()

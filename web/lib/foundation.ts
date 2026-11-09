@@ -45,5 +45,7 @@ export type NavigationData = {
     project_id: string | null
     label: string
     archived?: boolean
+    pinned?: boolean
+    preview?: string
   }[]
 }

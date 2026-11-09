@@ -380,7 +380,6 @@ def create_app(
                 updated_at="",
             )
         )
-        await threads.create(owner, project.id, "New thread")
         await threads.publish_resource(Scope("user", owner), "project", project.id)
         return web.json_response(
             ProjectRecord(
@@ -486,12 +485,37 @@ def create_app(
             kwargs["project_id"] = payload.project_id
         if "archived" in payload.model_fields_set:
             kwargs["archived"] = payload.archived
+        if "pinned" in payload.model_fields_set:
+            kwargs["pinned"] = payload.pinned
         if not kwargs:
             raise ValueError("No thread changes were provided")
         thread = await threads.update(
             session(request).user_id, request.match_info["thread_id"], **kwargs
         )
         return web.json_response(thread.record.model_dump())
+
+    async def delete_project(request: web.Request) -> web.Response:
+        owner = session(request).user_id
+        project_id = request.match_info["project_id"]
+        project = await database.telegram_project(owner, project_id)
+        if project is None or project.kind != "custom":
+            raise web.HTTPNotFound()
+        async with database.transaction() as conn:
+            await conn.execute(
+                "DELETE FROM telegram_projects WHERE id=? AND user_id=? AND kind='custom'",
+                (project_id, owner),
+            )
+            # The FK would also detach these, but do it explicitly so the
+            # project page and Telegram stay consistent on every SQLite build.
+            await conn.execute(
+                "UPDATE threads SET project_id=NULL, revision=revision+1 "
+                "WHERE scope_kind='user' AND scope_id=? AND project_id=?",
+                (owner, project_id),
+            )
+        if await database.active_telegram_project_id(owner) == project_id:
+            await database.set_active_telegram_project_id(owner, "")
+        await threads.publish_resource(Scope("user", owner), "project", project_id)
+        return web.json_response({"deleted": True})
 
     async def send_message(request: web.Request) -> web.Response:
         payload = SendRequest.model_validate(await request.json())
@@ -527,7 +551,8 @@ def create_app(
         activities: list[ActivityRecord] = []
         if run_row is not None:
             rows = await database.fetch_all(
-                "SELECT id AS sequence,category,status,label,tool_id FROM run_activity "
+                "SELECT id AS sequence,category,status,label,tool_id,tool_name,"
+                "tool_args,tool_output FROM run_activity "
                 "WHERE run_id=? AND created>=? ORDER BY id DESC LIMIT 200",
                 (run_row["id"], time.time() - 86400),
             )
@@ -706,8 +731,9 @@ def create_app(
         if row is None:
             raise web.HTTPNotFound()
         activities = await database.fetch_all(
-            "SELECT id AS sequence,category,status FROM run_activity WHERE run_id=? AND created>=? "
-            "ORDER BY id DESC LIMIT 200",
+            "SELECT id AS sequence,category,status,label,tool_id,tool_name,"
+            "tool_args,tool_output FROM run_activity "
+            "WHERE run_id=? AND created>=? ORDER BY id DESC LIMIT 200",
             (row["id"], time.time() - 86400),
         )
         record = RunDetails.model_validate(
@@ -729,7 +755,9 @@ def create_app(
                     "cost_state": row["cost_state"],
                 },
                 "delivery_state": row["delivery_state"],
-                "activities": [dict(item) for item in reversed(activities)],
+                "activities": [
+                    activity_record(item).model_dump() for item in reversed(activities)
+                ],
             }
         )
         return web.json_response(record.model_dump())
@@ -743,7 +771,8 @@ def create_app(
         if row is None:
             raise web.HTTPNotFound()
         activities = await database.fetch_all(
-            "SELECT id AS sequence,category,status,label,tool_id FROM run_activity "
+            "SELECT id AS sequence,category,status,label,tool_id,tool_name,"
+            "tool_args,tool_output FROM run_activity "
             "WHERE run_id=? AND created>=? ORDER BY id DESC LIMIT 200",
             (row["id"], time.time() - 86400),
         )
@@ -785,6 +814,7 @@ def create_app(
     app.router.add_get("/api/v1/projects", projects)
     app.router.add_post("/api/v1/projects", create_project)
     app.router.add_patch("/api/v1/projects/{project_id}", update_project)
+    app.router.add_delete("/api/v1/projects/{project_id}", delete_project)
     app.router.add_get("/api/v1/threads", list_threads)
     app.router.add_post("/api/v1/threads", create_thread)
     app.router.add_get("/api/v1/threads/{thread_id}", get_thread)

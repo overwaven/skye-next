@@ -16,11 +16,10 @@ import {
   Search01Icon,
   ToolsIcon,
   WorkflowIcon,
-  Square01Icon,
+  StopIcon,
 } from "@hugeicons/core-free-icons"
 import { SkyeMark } from "@/components/skye-mark"
 import { PageHeader } from "@/components/workspace/page-header"
-import { ContextPanel } from "@/components/workspace/context-panel"
 import { Markdown } from "@/components/workspace/markdown"
 import { MediaPicker } from "@/components/workspace/media-picker"
 import { PreviewableAttachment } from "@/components/workspace/attachment-preview"
@@ -61,10 +60,15 @@ import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import { AttachmentGroup } from "@/components/ui/attachment"
 import { Skeleton } from "@/components/ui/skeleton"
 import {
+  CodeBlock,
+  CodeBlockContent,
+} from "@/components/ui/code-block"
+import {
   Trace,
   TraceCollapsible,
   TraceCollapsibleContent,
   TraceCollapsibleTrigger,
+  TraceDescription,
   TraceIcon,
   TraceLine,
   TraceTitle,
@@ -107,6 +111,9 @@ type Step = {
   label: string
   status: "running" | "completed" | "failed"
   category: string
+  tool_name: string
+  tool_args: string
+  tool_output: string
 }
 
 const ACTIVE = new Set(["accepted", "running", "cancelling"])
@@ -118,8 +125,20 @@ function steps(activities: ActivityRecord[]): Step[] {
       activity.tool_id ||
       `${activity.category}:${activity.label}:${activity.sequence}`
     const current = found.get(key)
-    if (!current || activity.sequence > current.sequence)
+    if (!current) {
       found.set(key, activity)
+      continue
+    }
+    const latest =
+      activity.sequence >= current.sequence ? activity : current
+    const earlier = latest === activity ? current : activity
+    found.set(key, {
+      ...latest,
+      label: latest.label || earlier.label,
+      tool_name: latest.tool_name || earlier.tool_name,
+      tool_args: latest.tool_args || earlier.tool_args,
+      tool_output: latest.tool_output || earlier.tool_output,
+    })
   }
   return [...found.entries()].map(([key, activity]) => ({
     key,
@@ -138,6 +157,9 @@ function steps(activities: ActivityRecord[]): Step[] {
         "Used a tool"),
     status: activity.status,
     category: activity.category,
+    tool_name: activity.tool_name || "",
+    tool_args: activity.tool_args || "",
+    tool_output: activity.tool_output || "",
   }))
 }
 
@@ -227,6 +249,7 @@ function RunTools({
 }) {
   const list = steps(activities)
   const stopped = run.state === "failed" || run.state === "interrupted"
+  const [expanded, setExpanded] = React.useState<boolean | undefined>(undefined)
   if (list.length === 0 && !ACTIVE.has(run.state)) return null
   return (
     <MessageScrollerItem messageId={`run-tools-${run.id}`}>
@@ -239,7 +262,10 @@ function RunTools({
             <TraceTitle>{run.label}</TraceTitle>
           </TraceLine>
         ) : (
-          <TraceCollapsible defaultOpen={ACTIVE.has(run.state) || stopped}>
+          <TraceCollapsible
+            open={expanded ?? (ACTIVE.has(run.state) || stopped)}
+            onOpenChange={setExpanded}
+          >
             <TraceCollapsibleTrigger>
               <TraceLine status={stopped ? "error" : undefined}>
                 <TraceIcon>
@@ -253,24 +279,63 @@ function RunTools({
             <TraceCollapsibleContent>
               <div className="flex flex-col gap-2">
                 {list.map((step) => (
-                  <TraceLine
-                    key={step.key}
-                    status={
-                      step.status === "running"
-                        ? "running"
-                        : step.status === "failed"
-                          ? "error"
-                          : undefined
-                    }
-                  >
-                    <TraceIcon>
-                      <HugeiconsIcon icon={toolIcon(step.category)} />
-                    </TraceIcon>
-                    <TraceTitle>{step.label}</TraceTitle>
-                    {step.status === "running" && (
-                      <Spinner className="size-3" />
-                    )}
-                  </TraceLine>
+                  <TraceCollapsible key={step.key}>
+                    <TraceCollapsibleTrigger>
+                      <TraceLine
+                        status={
+                          step.status === "running"
+                            ? "running"
+                            : step.status === "failed"
+                              ? "error"
+                              : undefined
+                        }
+                      >
+                        <TraceIcon>
+                          <HugeiconsIcon icon={toolIcon(step.category)} />
+                        </TraceIcon>
+                        <TraceTitle>{step.tool_name || step.label}</TraceTitle>
+                        {step.tool_name && step.label !== step.tool_name && (
+                          <TraceDescription>{step.label}</TraceDescription>
+                        )}
+                        {step.status === "running" && (
+                          <Spinner className="size-3" />
+                        )}
+                      </TraceLine>
+                    </TraceCollapsibleTrigger>
+                    <TraceCollapsibleContent>
+                      <div className="flex flex-col gap-3 text-foreground">
+                        {step.tool_args && (
+                          <div className="flex flex-col gap-1.5">
+                            <span className="text-xs font-medium text-muted-foreground">
+                              Input
+                            </span>
+                            <CodeBlock size="sm">
+                              <CodeBlockContent wrap>
+                                {step.tool_args}
+                              </CodeBlockContent>
+                            </CodeBlock>
+                          </div>
+                        )}
+                        {step.tool_output && (
+                          <div className="flex flex-col gap-1.5">
+                            <span className="text-xs font-medium text-muted-foreground">
+                              Result
+                            </span>
+                            <CodeBlock size="sm">
+                              <CodeBlockContent wrap>
+                                {step.tool_output}
+                              </CodeBlockContent>
+                            </CodeBlock>
+                          </div>
+                        )}
+                        {!step.tool_args && !step.tool_output && (
+                          <p className="text-sm text-muted-foreground">
+                            No details recorded for this step.
+                          </p>
+                        )}
+                      </div>
+                    </TraceCollapsibleContent>
+                  </TraceCollapsible>
                 ))}
               </div>
             </TraceCollapsibleContent>
@@ -347,6 +412,7 @@ export function Conversation({
     defaultProjectId
   )
   const draftLoaded = React.useRef(false)
+  const composerRef = React.useRef<HTMLTextAreaElement>(null)
 
   const draftKey = `skye:draft:${current?.id ?? "new"}`
   React.useEffect(() => {
@@ -654,7 +720,6 @@ export function Conversation({
   const currentProject = current?.project_id
     ? projectList.find((item) => item.id === current.project_id)
     : undefined
-  const instructions = currentProject?.instructions ?? project?.instructions
   const chosenProject = newProject
     ? projectList.find((item) => item.id === newProject)
     : undefined
@@ -688,10 +753,12 @@ export function Conversation({
         {!current && connected && (
           <DropdownMenu>
             <DropdownMenuTrigger render={<Button variant="ghost" size="sm" />}>
-              <HugeiconsIcon icon={Folder01Icon} data-icon="inline-start" />
-              {chosenProject
-                ? `${chosenProject.emoji || "📁"} ${chosenProject.name}`
-                : "No project"}
+              {chosenProject ? (
+                <span aria-hidden="true">{chosenProject.emoji || "📁"}</span>
+              ) : (
+                <HugeiconsIcon icon={Folder01Icon} data-icon="inline-start" />
+              )}
+              {chosenProject ? chosenProject.name : "No project"}
             </DropdownMenuTrigger>
             <DropdownMenuContent align="end">
               <DropdownMenuGroup>
@@ -725,11 +792,10 @@ export function Conversation({
             aria-label="Stop"
             onClick={() => void stop()}
           >
-            <HugeiconsIcon icon={Square01Icon} data-icon="inline-start" />
+            <HugeiconsIcon icon={StopIcon} data-icon="inline-start" />
             <span className="hidden sm:inline">Stop</span>
           </Button>
         )}
-        <ContextPanel instructions={instructions} connected={connected} activities={activities} />
       </PageHeader>
       <main className="conversation-main" aria-label="Conversation">
         {preview && (
@@ -976,6 +1042,7 @@ export function Conversation({
               </FieldLabel>
               <InputGroup>
                 <InputGroupTextarea
+                  ref={composerRef}
                   id={id}
                   name="message"
                   value={draft}
@@ -1014,18 +1081,12 @@ export function Conversation({
                     <VoiceRecorder
                       csrfToken={csrfToken}
                       disabled={active}
-                      onReady={(text, media) => {
-                        setSelected((current) =>
-                          current.some((item) => item.id === media.id)
-                            ? current
-                            : [...current, media]
-                        )
-                        setTranscripts((current) => ({
-                          ...current,
-                          [media.id]: text,
-                        }))
+                      onReady={(text) => {
                         setDraft((current) =>
-                          current.trim() ? `${current}\n${text}` : text
+                          current.trim() ? `${current.trimEnd()}\n${text}` : text
+                        )
+                        requestAnimationFrame(() =>
+                          composerRef.current?.focus()
                         )
                       }}
                     />
@@ -1062,7 +1123,7 @@ export function Conversation({
                       aria-label="Stop"
                       onClick={() => void stop()}
                     >
-                      <HugeiconsIcon icon={Square01Icon} />
+                      <HugeiconsIcon icon={StopIcon} />
                     </InputGroupButton>
                   ) : (
                     <InputGroupButton

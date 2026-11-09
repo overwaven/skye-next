@@ -43,7 +43,10 @@ export type Category = "web" | "image" | "voice" | "code" | "memory" | "connecto
 export type Label1 = string
 export type Sequence = number
 export type Status = "running" | "completed" | "failed"
+export type ToolArgs = string
 export type ToolId = string
+export type ToolName = string
+export type ToolOutput = string
 export type RunId = string
 export type Type1 = "run.activity"
 export type Id1 = string
@@ -139,6 +142,8 @@ export type Messages1 = VisibleMessage[]
 export type OlderThan1 = number | null
 export type Archived = boolean
 export type Id7 = string
+export type Pinned = boolean
+export type Preview = string
 export type ProjectId = string | null
 export type Revision3 = number
 export type Title = string
@@ -147,6 +152,7 @@ export type ProjectId1 = string | null
 export type Title1 = string
 export type Threads = ThreadRecord[]
 export type Archived1 = boolean | null
+export type Pinned1 = boolean | null
 export type ProjectId2 = string | null
 export type Title2 = string | null
 export type Text2 = string
@@ -242,7 +248,10 @@ export interface ActivityRecord {
   label?: Label1
   sequence: Sequence
   status: Status
+  tool_args?: ToolArgs
   tool_id?: ToolId
+  tool_name?: ToolName
+  tool_output?: ToolOutput
 }
 export interface MessageEvent {
   message: VisibleMessage
@@ -388,6 +397,8 @@ export interface Snapshot {
 export interface ThreadRecord {
   archived?: Archived
   id: Id7
+  pinned?: Pinned
+  preview?: Preview
   project_id: ProjectId
   revision: Revision3
   title: Title
@@ -404,6 +415,7 @@ export interface ThreadList {
 }
 export interface ThreadUpdate {
   archived?: Archived1
+  pinned?: Pinned1
   project_id?: ProjectId2
   title?: Title2
 }

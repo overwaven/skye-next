@@ -10,6 +10,8 @@ import {
   Edit02Icon,
   Folder01Icon,
   MoreHorizontalIcon,
+  PinIcon,
+  PinOffIcon,
   Tick02Icon,
 } from "@hugeicons/core-free-icons"
 import { Button } from "@/components/ui/button"
@@ -50,6 +52,7 @@ type ListThread = {
   title: string
   project_id: string | null
   archived?: boolean
+  pinned?: boolean
 }
 
 export function ThreadMenu({
@@ -142,6 +145,16 @@ export function ThreadMenu({
             >
               <HugeiconsIcon icon={Edit02Icon} />
               Rename
+            </DropdownMenuItem>
+            <DropdownMenuItem
+              onClick={() => {
+                void patch({ pinned: !thread.pinned })
+              }}
+            >
+              <HugeiconsIcon
+                icon={thread.pinned ? PinOffIcon : PinIcon}
+              />
+              {thread.pinned ? "Unpin" : "Pin"}
             </DropdownMenuItem>
             <DropdownMenuSub>
               <DropdownMenuSubTrigger>

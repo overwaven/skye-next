@@ -8,6 +8,8 @@ import {
   ArrowRight01Icon,
   BrainIcon,
   Folder01Icon,
+  Message01Icon,
+  PinIcon,
   Plug01Icon,
   Robot01Icon,
   SparklesIcon,
@@ -27,6 +29,8 @@ import {
 import { Button } from "@/components/ui/button"
 import {
   Empty,
+  EmptyContent,
+  EmptyDescription,
   EmptyHeader,
   EmptyMedia,
   EmptyTitle,
@@ -41,15 +45,9 @@ import {
   DialogTrigger,
   DialogClose,
 } from "@/components/ui/dialog"
-import {
-  Field,
-  FieldDescription,
-  FieldGroup,
-  FieldLabel,
-} from "@/components/ui/field"
+import { Field, FieldGroup, FieldLabel } from "@/components/ui/field"
 import { Input } from "@/components/ui/input"
 import { Textarea } from "@/components/ui/textarea"
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import {
   librarySections,
   type LibrarySection,
@@ -192,21 +190,71 @@ export function ProjectView({
           <HugeiconsIcon icon={Add01Icon} data-icon="inline-end" />
         </Button>
       </PageHeader>
-      <main className="detail-content">
-        <Tabs defaultValue="threads">
-          <TabsList aria-label="Project sections">
-            <TabsTrigger value="threads">Threads</TabsTrigger>
-            <TabsTrigger value="instructions">Instructions</TabsTrigger>
-          </TabsList>
-          <TabsContent value="threads">
-            <ul className="thread-list">
+      <main className="detail-content resource-page">
+        {threads.length === 0 ? (
+          <Empty className="border border-dashed bg-card/30 py-14">
+            <EmptyHeader>
+              <EmptyMedia variant="icon">
+                <HugeiconsIcon icon={Folder01Icon} />
+              </EmptyMedia>
+              <EmptyTitle>No threads yet</EmptyTitle>
+              <EmptyDescription>
+                Start a thread in this project and it will appear here.
+              </EmptyDescription>
+            </EmptyHeader>
+            <EmptyContent>
+              <Button
+                nativeButton={false}
+                render={<Link href={`/chat?project=${project.id}`} />}
+              >
+                Create the first thread
+                <HugeiconsIcon icon={Add01Icon} data-icon="inline-end" />
+              </Button>
+            </EmptyContent>
+          </Empty>
+        ) : (
+          <div className="overflow-hidden rounded-3xl border bg-card/40">
+            <div
+              role="list"
+              className="flex w-full flex-col divide-y divide-border"
+            >
               {threads.map((thread) => (
-                <li key={thread.id}>
-                  <div className="flex items-center gap-2">
-                    <Link href={`/chat/${thread.id}`} className="flex-1">
-                      <h3>{thread.title}</h3>
+                <Item
+                  key={thread.id}
+                  role="listitem"
+                  className="rounded-none border-0 px-4 py-3.5 sm:px-5"
+                >
+                  <ItemMedia
+                    variant="icon"
+                    className="size-10 rounded-xl bg-muted"
+                  >
+                    <HugeiconsIcon
+                      icon={thread.pinned ? PinIcon : Message01Icon}
+                    />
+                  </ItemMedia>
+                  <ItemContent>
+                    <ItemTitle>
+                      <Link href={`/chat/${thread.id}`}>{thread.title}</Link>
+                    </ItemTitle>
+                    <p className="line-clamp-2 text-sm text-muted-foreground">
+                      {thread.preview || "No messages yet."}
+                    </p>
+                  </ItemContent>
+                  <ItemActions>
+                    {thread.archived && (
+                      <span className="text-sm text-muted-foreground">
+                        Archived
+                      </span>
+                    )}
+                    <Button
+                      variant="ghost"
+                      size="icon-sm"
+                      nativeButton={false}
+                      render={<Link href={`/chat/${thread.id}`} />}
+                      aria-label={`Open ${thread.title}`}
+                    >
                       <HugeiconsIcon icon={ArrowRight01Icon} />
-                    </Link>
+                    </Button>
                     {csrfToken && (
                       <ThreadMenu
                         thread={thread}
@@ -214,33 +262,12 @@ export function ProjectView({
                         csrfToken={csrfToken}
                       />
                     )}
-                  </div>
-                </li>
+                  </ItemActions>
+                </Item>
               ))}
-            </ul>
-          </TabsContent>
-          <TabsContent value="instructions">
-            <FieldGroup className="instructions-editor">
-              <Field>
-                <FieldLabel htmlFor="project-instructions">
-                  Project instructions
-                </FieldLabel>
-                <Textarea
-                  id="project-instructions"
-                  value={project.instructions}
-                  maxLength={12000}
-                  rows={6}
-                  disabled
-                />
-                <FieldDescription>
-                  {csrfToken
-                    ? "Use Edit project to change instructions."
-                    : "Project instructions are shared with Telegram."}
-                </FieldDescription>
-              </Field>
-            </FieldGroup>
-          </TabsContent>
-        </Tabs>
+            </div>
+          </div>
+        )}
       </main>
     </div>
   )

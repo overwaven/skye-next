@@ -19,7 +19,7 @@ test("draft is never sent and survives the feature dialog", async ({
     page.getByRole("button", { name: "Add files", exact: true })
   ).toBeFocused()
   await page.getByRole("button", { name: "Send message", exact: true }).click()
-  await expect(page.getByRole("status")).toContainText("Not sent")
+  await expect(page.locator('p[role="status"]')).toContainText("Not sent")
   await expect(input).toHaveValue("A private thought")
 })
 
@@ -34,24 +34,12 @@ test("search is keyboard reachable and routes to memory", async ({ page }) => {
 })
 
 for (const width of [1440, 768, 390, 320]) {
-  test(`chat and context at ${width}px`, async ({ page }) => {
+  test(`chat at ${width}px`, async ({ page }) => {
     await page.setViewportSize({ width, height: 900 })
     await page.goto("/dev/states/ready")
     await expect(
       page.getByText("Preview · Sample conversation.", { exact: false })
     ).toBeVisible()
-    await page.getByRole("button", { name: "Details", exact: true }).click()
-    await expect(
-      page.getByRole("heading", { name: "Details", exact: true })
-    ).toBeVisible()
-    if (width < 1200) {
-      await page.keyboard.press("Escape")
-      // Audit the settled page, not fading-out text that is being unmounted.
-      await expect(page.getByRole("dialog")).toHaveCount(0)
-    } else {
-      await page.getByRole("button", { name: "Close details" }).click()
-      await expect(page.locator("#thread-context")).toBeHidden()
-    }
     expect(
       await page.evaluate(
         () => document.documentElement.scrollWidth <= window.innerWidth
@@ -179,7 +167,7 @@ test("200% text resize keeps the composer and recovery actions reachable", async
   await send.scrollIntoViewIfNeeded()
   await expect(send).toBeInViewport()
   await send.click()
-  await expect(page.getByRole("status")).toContainText("Not sent")
+  await expect(page.locator('p[role="status"]')).toContainText("Not sent")
   expect(
     await page.evaluate(
       () => document.documentElement.scrollWidth <= innerWidth
@@ -187,7 +175,7 @@ test("200% text resize keeps the composer and recovery actions reachable", async
   ).toBe(true)
 })
 
-test("resource editor and context have no console errors and pass axe while open", async ({
+test("resource editor has no console errors and passes axe while open", async ({
   page,
 }) => {
   const errors: string[] = []
@@ -213,11 +201,6 @@ test("resource editor and context have no console errors and pass axe while open
   await expect(
     page.getByRole("button", { name: "Add memory", exact: true })
   ).toBeFocused()
-  await page.goto("/chat/a-place-to-think")
-  await page.getByRole("button", { name: "Details", exact: true }).click()
-  await expect(page.locator("#thread-context")).toBeVisible()
-  await page.getByRole("button", { name: "Close details" }).click()
-  await expect(page.locator("#thread-context")).toBeHidden()
   expect(
     (
       await new AxeBuilder({ page })

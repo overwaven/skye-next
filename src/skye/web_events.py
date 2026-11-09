@@ -86,6 +86,9 @@ def activity_record(row: aiosqlite.Row) -> ActivityRecord:
         status=row["status"],
         label=row["label"] if "label" in keys else "",
         tool_id=row["tool_id"] if "tool_id" in keys else "",
+        tool_name=row["tool_name"] if "tool_name" in keys else "",
+        tool_args=row["tool_args"] if "tool_args" in keys else "",
+        tool_output=row["tool_output"] if "tool_output" in keys else "",
     )
 
 

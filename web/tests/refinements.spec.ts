@@ -19,13 +19,11 @@ test("search groups destinations and library opens a section chooser", async ({
   await expect(page).toHaveURL(/\/library\/memory$/)
 })
 
-test("mobile text stays at least 16px and Details has a swipe handle", async ({
+test("mobile text stays at least 16px and navigation has a swipe handle", async ({
   page,
 }, info) => {
   await page.setViewportSize({ width: 390, height: 844 })
   await page.goto("/dev/states/ready")
-  await page.getByRole("button", { name: "Details", exact: true }).click()
-  await expect(page.locator('[data-slot="drawer-swipe-handle"]')).toBeVisible()
   const undersized = await page.evaluate(() =>
     Array.from(document.querySelectorAll("body *"))
       .filter(
@@ -43,9 +41,7 @@ test("mobile text stays at least 16px and Details has a swipe handle", async ({
       }))
   )
   expect(undersized).toEqual([])
-  await page.screenshot({ path: info.outputPath("mobile-details.png") })
-  await page.keyboard.press("Escape")
-  await expect(page.getByRole("dialog")).toHaveCount(0)
+  await page.screenshot({ path: info.outputPath("mobile-chat.png") })
   await page.getByRole("button", { name: "Toggle Sidebar" }).click()
   await expect(page.locator('[data-slot="drawer-swipe-handle"]')).toBeVisible()
   await page.screenshot({ path: info.outputPath("mobile-navigation.png") })
@@ -57,6 +53,6 @@ test("settings and projects expose real tab panels", async ({ page }) => {
   await expect(page).toHaveURL(/\/settings\/privacy$/)
   await expect(page.getByRole("tabpanel")).toContainText("History")
   await page.goto("/projects/skye-web")
-  await page.getByRole("tab", { name: "Instructions" }).click()
-  await expect(page.getByRole("tabpanel", { name: "Instructions" })).toBeVisible()
+  await expect(page.getByRole("heading", { level: 1 })).toBeVisible()
+  await expect(page.getByRole("tab", { name: "Instructions" })).toHaveCount(0)
 })

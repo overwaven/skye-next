@@ -167,6 +167,14 @@ def safe_tool_label(name: str) -> str:
     return _TOOL_LABELS.get(name, "Used a tool")
 
 
+def display_tool_name(name: str) -> str:
+    """Readable tool name for the expandable trace; never a credential."""
+    if name.startswith(("mcp_", "cmp_")) and "__" in name:
+        name = name.split("__", 1)[1]
+    cleaned = name.replace("_", " ").replace("-", " ").strip()
+    return cleaned[:160] or "tool"
+
+
 @dataclass(frozen=True, slots=True)
 class RunOutput:
     text: str

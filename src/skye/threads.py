@@ -35,6 +35,8 @@ CREATE TABLE IF NOT EXISTS threads (
     session_ref TEXT NOT NULL UNIQUE,
     default_instructions TEXT NOT NULL DEFAULT '',
     archived INTEGER NOT NULL DEFAULT 0,
+    pinned INTEGER NOT NULL DEFAULT 0,
+    preview TEXT NOT NULL DEFAULT '',
     revision INTEGER NOT NULL DEFAULT 1,
     created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
@@ -110,6 +112,11 @@ CREATE TABLE IF NOT EXISTS run_activity (
     run_id TEXT NOT NULL REFERENCES canonical_runs(id),
     category TEXT NOT NULL,
     status TEXT NOT NULL,
+    label TEXT NOT NULL DEFAULT '',
+    tool_id TEXT NOT NULL DEFAULT '',
+    tool_name TEXT NOT NULL DEFAULT '',
+    tool_args TEXT NOT NULL DEFAULT '',
+    tool_output TEXT NOT NULL DEFAULT '',
     created REAL NOT NULL
 );
 CREATE TABLE IF NOT EXISTS run_reconciliation (
@@ -181,10 +188,36 @@ class ThreadStore:
         await self.database._ensure_column(
             "run_activity", "tool_id", "TEXT NOT NULL DEFAULT ''"
         )
+        await self.database._ensure_column(
+            "run_activity", "tool_name", "TEXT NOT NULL DEFAULT ''"
+        )
+        await self.database._ensure_column(
+            "run_activity", "tool_args", "TEXT NOT NULL DEFAULT ''"
+        )
+        await self.database._ensure_column(
+            "run_activity", "tool_output", "TEXT NOT NULL DEFAULT ''"
+        )
+        await self.database._ensure_column(
+            "threads", "pinned", "INTEGER NOT NULL DEFAULT 0"
+        )
+        await self.database._ensure_column(
+            "threads", "preview", "TEXT NOT NULL DEFAULT ''"
+        )
         await self.database._ensure_column("canonical_runs", "failure", "TEXT")
+        await self._backfill_previews()
         if self.events is not None:
             await self.events.install(self.database.conn)
         await self.database.conn.execute("INSERT OR IGNORE INTO web_schema VALUES (3)")
+        await self.database.conn.commit()
+
+    async def _backfill_previews(self) -> None:
+        await self.database.conn.execute(
+            """UPDATE threads SET preview=COALESCE((
+                   SELECT substr(json_extract(v.payload,'$.parts[0].text'),1,280)
+                   FROM visible_messages v WHERE v.thread_id=threads.id
+                   ORDER BY v.sequence DESC LIMIT 1
+               ),'') WHERE preview=''"""
+        )
         await self.database.conn.commit()
 
     async def migrate(self) -> dict[str, int]:
@@ -201,6 +234,16 @@ class ThreadStore:
         await self.database._ensure_column("canonical_runs", "failure", "TEXT")
         await self.database._ensure_column("run_activity", "label", "TEXT NOT NULL DEFAULT ''")
         await self.database._ensure_column("run_activity", "tool_id", "TEXT NOT NULL DEFAULT ''")
+        await self.database._ensure_column("run_activity", "tool_name", "TEXT NOT NULL DEFAULT ''")
+        await self.database._ensure_column("run_activity", "tool_args", "TEXT NOT NULL DEFAULT ''")
+        await self.database._ensure_column(
+            "run_activity", "tool_output", "TEXT NOT NULL DEFAULT ''"
+        )
+        await self.database._ensure_column("threads", "pinned", "INTEGER NOT NULL DEFAULT 0")
+        await self.database._ensure_column(
+            "threads", "preview", "TEXT NOT NULL DEFAULT ''"
+        )
+        await self._backfill_previews()
         await WebEventStore(self.database).install(self.database.conn)
         await self.database.conn.commit()
         counts = {"projects": 0, "private": 0, "groups": 0, "automations": 0}
@@ -409,6 +452,8 @@ class ThreadStore:
                 project_id=row["project_id"],
                 title=row["title"],
                 archived=bool(row["archived"]),
+                pinned=bool(row["pinned"]),
+                preview=row["preview"],
                 revision=row["revision"],
             ),
             scope,
@@ -418,8 +463,9 @@ class ThreadStore:
 
     async def list_threads(self, owner: int) -> list[ThreadRecord]:
         rows = await self.database.fetch_all(
-            "SELECT id,project_id,title,archived,revision FROM threads "
-            "WHERE scope_kind='user' AND scope_id=? ORDER BY rowid DESC LIMIT 200",
+            "SELECT id,project_id,title,archived,pinned,preview,revision FROM threads "
+            "WHERE scope_kind='user' AND scope_id=? "
+            "ORDER BY pinned DESC, rowid DESC LIMIT 200",
             (owner,),
         )
         return [
@@ -428,6 +474,8 @@ class ThreadStore:
                 project_id=row["project_id"],
                 title=row["title"],
                 archived=bool(row["archived"]),
+                pinned=bool(row["pinned"]),
+                preview=row["preview"],
                 revision=row["revision"],
             )
             for row in rows
@@ -469,6 +517,7 @@ class ThreadStore:
         title: str | None = None,
         project_id: object = _UNSET,
         archived: bool | None = None,
+        pinned: bool | None = None,
     ) -> Thread:
         thread = await self.require(Scope("user", owner), thread_id)
         assignments: list[str] = []
@@ -492,6 +541,9 @@ class ThreadStore:
         if archived is not None:
             assignments.append("archived=?")
             values.append(1 if archived else 0)
+        if pinned is not None:
+            assignments.append("pinned=?")
+            values.append(1 if pinned else 0)
         if not assignments:
             return thread
         assignments.append("revision=revision+1")
@@ -596,6 +648,13 @@ class ThreadStore:
                 await conn.execute(
                     "INSERT INTO canonical_media VALUES(?,?,?,?)",
                     (part.file_id, result.id, item.source_file_id, item.size),
+                )
+            preview = " ".join(text.split())[:280]
+            if not preview and media:
+                preview = "Attachment"
+            if preview:
+                await conn.execute(
+                    "UPDATE threads SET preview=? WHERE id=?", (preview, thread_id)
                 )
         if self.events is not None:
             await self.events.publish(
@@ -907,6 +966,9 @@ class ThreadStore:
         *,
         label: str = "",
         tool_id: str = "",
+        tool_name: str = "",
+        tool_args: str = "",
+        tool_output: str = "",
     ) -> None:
         if category not in {
             "web",
@@ -933,9 +995,19 @@ class ThreadStore:
                 raise LookupError("Run not found")
             now = time.time()
             cursor = await conn.execute(
-                "INSERT INTO run_activity(run_id,category,status,label,tool_id,created) "
-                "VALUES(?,?,?,?,?,?)",
-                (run_id, category, status, label[:120], tool_id[:120], now),
+                "INSERT INTO run_activity(run_id,category,status,label,tool_id,"
+                "tool_name,tool_args,tool_output,created) VALUES(?,?,?,?,?,?,?,?,?)",
+                (
+                    run_id,
+                    category,
+                    status,
+                    label[:120],
+                    tool_id[:120],
+                    tool_name[:160],
+                    tool_args[:8000],
+                    tool_output[:8000],
+                    now,
+                ),
             )
             activity_id = int(cursor.lastrowid or 0)
             await conn.execute("DELETE FROM run_activity WHERE created<?", (now - 86400,))
@@ -958,6 +1030,9 @@ class ThreadStore:
                         "status": status,
                         "label": label[:120],
                         "tool_id": tool_id[:120],
+                        "tool_name": tool_name[:160],
+                        "tool_args": tool_args[:8000],
+                        "tool_output": tool_output[:8000],
                     },
                 },
                 thread_id=str(row["thread_id"]),
