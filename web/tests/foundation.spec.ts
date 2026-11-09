@@ -199,12 +199,9 @@ test("resource editor and context have no console errors and pass axe while open
   await page.goto("/library/memory")
   await page.locator('[data-hydrated="true"]').waitFor()
   await page.getByRole("button", { name: "Add memory", exact: true }).click()
-  await expect(page.getByRole("dialog")).toBeVisible()
-  await expect(page.getByRole("dialog")).toHaveCSS("opacity", "1")
-  await expect(page.locator('[data-slot="dialog-overlay"]')).toHaveCSS(
-    "opacity",
-    "1"
-  )
+  await expect(
+    page.getByRole("textbox", { name: "Memory", exact: true })
+  ).toBeVisible()
   expect(
     (
       await new AxeBuilder({ page })

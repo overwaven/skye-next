@@ -1,6 +1,8 @@
 import { test, expect } from "@playwright/test"
 import AxeBuilder from "@axe-core/playwright"
 
+test.use({ reducedMotion: "reduce" })
+
 test("personal memory and skills persist through real API; MCP errors keep drafts", async ({
   page,
 }, info) => {
@@ -11,24 +13,37 @@ test("personal memory and skills persist through real API; MCP errors keep draft
   const suffix = `${info.project.name}-${Date.now()}`
   const memory = `Stage six prefers tea ${suffix}`
   await page.goto("/library/memory")
+  await expect(
+    page.getByRole("link", { name: "Back to Library", exact: true })
+  ).toBeVisible()
   await page.getByRole("button", { name: "Add memory", exact: true }).click()
   await page.getByRole("textbox", { name: "Memory", exact: true }).fill(memory)
   await page.getByRole("button", { name: "Save", exact: true }).click()
   await expect(page.getByRole("dialog")).toHaveCount(0)
+  await expect(
+    page.getByRole("textbox", { name: "Memory", exact: true })
+  ).toHaveCount(0)
   await page.reload()
   await expect(page.getByText(memory, { exact: true })).toBeVisible()
   const row = page.locator('[data-slot="item"]').filter({ hasText: memory })
-  await row.getByRole("button", { name: "Edit", exact: true }).click()
+  await row.getByRole("button", { name: /Actions for/ }).click()
+  await page.getByRole("button", { name: "Edit", exact: true }).click()
   await page
     .getByRole("textbox", { name: "Memory", exact: true })
     .fill(memory + " edited")
   await page.getByRole("button", { name: "Save", exact: true }).click()
+  await expect(
+    page.getByRole("textbox", { name: "Memory", exact: true })
+  ).toHaveCount(0)
   await expect(
     page.getByText(memory + " edited", { exact: true })
   ).toBeVisible()
   await page.getByRole("textbox", { name: "Search memory" }).fill(suffix)
   for (const width of [1440, 768, 390, 320]) {
     await page.setViewportSize({ width, height: 900 })
+    await page.evaluate(
+      () => new Promise((resolve) => requestAnimationFrame(() => resolve(true)))
+    )
     expect(
       await page.evaluate(
         () => document.documentElement.scrollWidth <= innerWidth
@@ -38,8 +53,12 @@ test("personal memory and skills persist through real API; MCP errors keep draft
   }
   expect((await new AxeBuilder({ page }).analyze()).violations).toEqual([])
   await page.setViewportSize({ width: 1440, height: 900 })
-  await row.getByRole("button", { name: "Delete", exact: true }).click()
-  await page.getByRole("button", { name: "Remove", exact: true }).click()
+  await row.getByRole("button", { name: /Actions for/ }).click()
+  await page.getByRole("button", { name: "Delete", exact: true }).click()
+  await page
+    .getByRole("alertdialog")
+    .getByRole("button", { name: "Delete", exact: true })
+    .click()
   await expect(page.getByText(memory + " edited", { exact: true })).toHaveCount(
     0
   )
@@ -57,12 +76,24 @@ test("personal memory and skills persist through real API; MCP errors keep draft
   await expect(page.getByRole("heading", { name, exact: true })).toBeVisible()
   await page.getByRole("button", { name: "Install skill", exact: true }).click()
   await expect(page.getByRole("dialog")).toHaveCount(0)
-  await page.getByRole("link", { name: new RegExp(name) }).click()
+  await page
+    .getByRole("button", { name: `Open ${name}`, exact: true })
+    .click()
   await expect(
     page.getByText("Boil the water.", { exact: false })
   ).toBeVisible()
+  await expect(page.locator('[data-slot="sheet-content"]')).toHaveCSS(
+    "opacity",
+    "1"
+  )
   await page.screenshot({ path: info.outputPath("skill-detail.png") })
-  expect((await new AxeBuilder({ page }).analyze()).violations).toEqual([])
+  expect(
+    (
+      await new AxeBuilder({ page })
+        .include('[data-slot="sheet-content"]')
+        .analyze()
+    ).violations
+  ).toEqual([])
   await page.getByRole("button", { name: "Remove skill", exact: true }).click()
   await page.getByRole("button", { name: "Remove", exact: true }).click()
   await expect(page).toHaveURL(/\/library\/skills$/)

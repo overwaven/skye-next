@@ -5,7 +5,7 @@ import { useEffect, useRef, useState } from "react"
 import { PageHeader } from "@/components/workspace/page-header"
 import { Button } from "@/components/ui/button"
 import { Alert, AlertDescription } from "@/components/ui/alert"
-import { resourceRequest } from "@/components/workspace/personal-resources"
+import { resourceRequest } from "@/components/workspace/resources/resource-api"
 
 export function ConnectorVerification({ csrf }: { csrf: string }) {
   const [status, setStatus] = useState("Verifying your connection…")
@@ -39,7 +39,7 @@ export function ConnectorVerification({ csrf }: { csrf: string }) {
         title="Verify connection"
         parent={{ name: "Connectors", href: "/library/connectors" }}
       />
-      <main className="detail-content resource-manager">
+      <main className="detail-content resource-page">
         {error ? (
           <Alert>
             <AlertDescription>{status}</AlertDescription>
