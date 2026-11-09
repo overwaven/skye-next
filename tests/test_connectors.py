@@ -1,3 +1,4 @@
+import asyncio
 from collections.abc import Sequence
 from typing import Any
 
@@ -279,3 +280,56 @@ async def test_shareable_groups_only_include_groups_the_user_wrote_in(
     assert [item.chat_id for item in groups] == [-100]
     await service.share(4, "Alice", -100, "app", "exa")
     assert await service.shareable_groups(4, "app", "exa") == []
+
+
+class _HangingMCP:
+    def __init__(self, **_: Any) -> None:
+        pass
+
+    async def __aenter__(self) -> _HangingMCP:
+        return self
+
+    async def __aexit__(self, *_: object) -> bool:
+        return False
+
+    async def list_tools(self) -> list[object]:
+        await asyncio.sleep(3600)
+        return []
+
+
+async def test_hanging_custom_mcp_does_not_block_the_turn(
+    database: Database, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr("skye.connectors.MCPServerStreamableHttp", _HangingMCP)
+    service = ConnectorService(database, None, timeout_seconds=0.05)
+    await service.add_custom(9, "Slow CRM", "https://example.com/mcp", {})
+
+    async with service.open(RequestContext(9, "private", 9)) as session:
+        assert session.tools == ()
+
+
+class _BrokenCleanupMCP:
+    def __init__(self, **_: Any) -> None:
+        pass
+
+    async def __aenter__(self) -> _BrokenCleanupMCP:
+        return self
+
+    async def __aexit__(self, *_: object) -> bool:
+        return False
+
+    async def list_tools(self) -> list[object]:
+        raise BaseExceptionGroup(
+            "MCP cleanup", [asyncio.CancelledError()]
+        )
+
+
+async def test_broken_mcp_cleanup_does_not_abort_the_turn(
+    database: Database, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr("skye.connectors.MCPServerStreamableHttp", _BrokenCleanupMCP)
+    service = ConnectorService(database, None, timeout_seconds=1)
+    await service.add_custom(10, "Broken CRM", "https://example.com/mcp", {})
+
+    async with service.open(RequestContext(10, "private", 10)) as session:
+        assert session.tools == ()

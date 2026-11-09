@@ -241,6 +241,22 @@ def public_mcp_client(
     )
 
 
+def _task_cancelled() -> bool:
+    task = asyncio.current_task()
+    return bool(task is not None and task.cancelling())
+
+
+async def _close_mcp_stack(stack: AsyncExitStack) -> None:
+    """Close one failed MCP connection without letting cleanup stall a turn."""
+    try:
+        async with asyncio.timeout(2):
+            await stack.aclose()
+    except BaseException as error:
+        if _task_cancelled() or isinstance(error, asyncio.CancelledError):
+            raise
+        log.warning("connector_mcp_cleanup_failed", error=type(error).__name__)
+
+
 async def resolve_public_https(url: str) -> str:
     url = validate_mcp_url(url)
     host = urlsplit(url).hostname or ""
@@ -814,6 +830,9 @@ class ConnectorService:
         if not pending.connections:
             yield ConnectorSession((), pending.labels, counter)
             return
+        # A broken endpoint must never hold the whole turn hostage while it
+        # initializes. Attach time is bounded separately from tool-call time.
+        attach_timeout = min(self.timeout_seconds, 10.0)
         async with AsyncExitStack() as stack:
             tools: list[Tool] = []
             seen: set[str] = set()
@@ -833,16 +852,26 @@ class ConnectorService:
                     max_retry_attempts=1,
                     retry_backoff_seconds_base=0.5,
                 )
+                # Keep each server in its own stack so a failed cleanup cannot
+                # poison the session used by the healthy connectors.
+                connection_stack = AsyncExitStack()
                 try:
-                    await stack.enter_async_context(server)
-                    listed = await server.list_tools()
-                except Exception as error:
+                    async with asyncio.timeout(attach_timeout):
+                        await connection_stack.enter_async_context(server)
+                        listed = await server.list_tools()
+                except BaseException as error:
+                    await _close_mcp_stack(connection_stack)
+                    if _task_cancelled() or isinstance(error, asyncio.CancelledError):
+                        raise
+                    if not isinstance(error, (Exception, BaseExceptionGroup)):
+                        raise
                     log.warning(
                         "connector_mcp_unavailable",
                         label=connection.label,
                         error=type(error).__name__,
                     )
                     continue
+                stack.push_async_callback(connection_stack.aclose)
                 for item in listed:
                     public = public_tool_name(connection.label, item.name)
                     if public in seen:
