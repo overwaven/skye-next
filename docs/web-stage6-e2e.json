@@ -1,0 +1,9 @@
+{
+  "status": "passed",
+  "steps": [
+    "memory cross-channel CRUD, conflict, scope, limit and preference",
+    "skill preview/install/runtime/download/duplicate/IDOR/malicious archive",
+    "provider-authoritative pending/connected/revoked/outage; consent return; encrypted credential roundtrip and runtime SSRF",
+    "SSRF targets, unavailable provider, CSRF and owner-only deletion"
+  ]
+}

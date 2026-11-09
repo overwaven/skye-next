@@ -104,7 +104,7 @@ One caution before you enable the sandbox: the compose file mounts `/var/run/doc
 
 ## Web client
 
-The separate `web/` checkout contains the Next.js interface. It is deployed read-only at
+The `web/` directory in this repository contains the Next.js interface. It is deployed read-only at
 <https://chat.skye-bot.com>: Telegram OIDC signs in an existing account, projects/threads
 and confirmed transcript deliveries are visible, and sign-out/revoke-all work. Web sending,
 uploads, payments, resource edits and streams are not enabled. Canonical threads and the

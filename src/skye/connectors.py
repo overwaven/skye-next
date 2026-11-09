@@ -16,6 +16,7 @@ import httpx
 import structlog
 from agents import FunctionTool, Tool
 from agents.mcp import MCPServerStreamableHttp
+from agents.mcp.server import MCPServerStreamableHttpParams
 from agents.mcp.util import MCPUtil
 from agents.tool_context import ToolContext
 from aiogram import Bot
@@ -88,7 +89,10 @@ class ComposioAPI(Protocol):
     async def list_toolkits(self, query: str = "", limit: int = 8) -> list[AppConnector]: ...
     async def get_toolkit(self, slug: str) -> AppConnector: ...
     async def list_accounts(self, user_key: str) -> list[AppConnector]: ...
-    async def create_link(self, user_key: str, slug: str) -> str: ...
+    async def complete_auth(self, user_key: str, session_uri: str) -> str: ...
+    async def create_link(
+        self, user_key: str, slug: str, *, callback_url: str | None = None
+    ) -> str: ...
     async def delete_account(self, user_key: str, account_id: str) -> None: ...
     async def create_session(
         self,
@@ -162,7 +166,7 @@ def parse_headers(raw: str) -> dict[str, str]:
     for name, value in items:
         if not name or not HEADER_NAME.fullmatch(name) or name.lower() in BLOCKED_HEADERS:
             raise ConnectorError(f"Header `{name}` is not allowed.")
-        if not value or len(value) > 4096:
+        if not value or len(value) > 4096 or "\r" in value or "\n" in value:
             raise ConnectorError(f"Header `{name}` needs a value of at most 4096 characters.")
         headers[name] = value
     return headers
@@ -180,13 +184,61 @@ def validate_mcp_url(raw: str) -> str:
     if len(url) > 2048:
         raise ConnectorError("The URL is too long.")
     parts = urlsplit(url)
-    if parts.scheme != "https" or not parts.netloc or parts.username or parts.password:
+    if (
+        parts.scheme != "https"
+        or not parts.netloc
+        or parts.username
+        or parts.password
+        or parts.query
+        or parts.fragment
+        or parts.port not in {None, 443}
+    ):
         raise ConnectorError("Use an https:// URL with no username or password.")
     host = parts.hostname or ""
     if not host or host.endswith(".local") or host in {"localhost", "metadata.google.internal"}:
         raise ConnectorError("That host is not allowed.")
     _reject_ip(host)
     return url
+
+
+class PublicMCPTransport(httpx.AsyncHTTPTransport):
+    """Resolve and pin each request to a checked public IP, retaining TLS SNI.
+
+    Never use environment proxies or follow redirects for user-owned MCP endpoints.
+    Checking DNS then letting the HTTP library resolve again permits rebinding.
+    """
+
+    async def handle_async_request(self, request: httpx.Request) -> httpx.Response:
+        await resolve_public_https(str(request.url))
+        host = request.url.host
+        infos = await asyncio.to_thread(socket.getaddrinfo, host, 443, type=socket.SOCK_STREAM)
+        for info in infos:
+            _reject_ip(str(info[4][0]))
+        address = str(infos[0][4][0])
+        request.headers["Host"] = host
+        request.extensions["sni_hostname"] = host
+        request.url = request.url.copy_with(host=address)
+        response = await super().handle_async_request(request)
+        if 300 <= response.status_code < 400:
+            await response.aclose()
+            raise ConnectorError("MCP redirects are not allowed. Use the final HTTPS endpoint.")
+        return response
+
+
+def public_mcp_client(
+    headers: dict[str, str] | None = None,
+    timeout: httpx.Timeout | None = None,
+    auth: httpx.Auth | None = None,
+    **kwargs: Any,
+) -> httpx.AsyncClient:
+    return httpx.AsyncClient(
+        headers=headers,
+        timeout=timeout or httpx.Timeout(30),
+        auth=auth,
+        transport=PublicMCPTransport(),
+        trust_env=False,
+        follow_redirects=False,
+    )
 
 
 async def resolve_public_https(url: str) -> str:
@@ -215,7 +267,8 @@ def _reject_ip(value: str) -> None:
     except ValueError:
         return
     if (
-        address.is_private
+        not address.is_global
+        or address.is_private
         or address.is_loopback
         or address.is_link_local
         or address.is_multicast
@@ -256,11 +309,11 @@ class ComposioClient:
         data = await self._request(
             "GET",
             "/connected_accounts",
-            params={"user_ids": user_key, "statuses": "ACTIVE", "limit": 100},
+            params={"user_ids": user_key, "limit": 100},
         )
         apps: list[AppConnector] = []
         for item in data.get("items", []):
-            if not isinstance(item, dict) or item.get("is_disabled"):
+            if not isinstance(item, dict):
                 continue
             raw_toolkit = item.get("toolkit")
             toolkit = raw_toolkit if isinstance(raw_toolkit, dict) else {}
@@ -271,18 +324,38 @@ class ComposioClient:
                 AppConnector(
                     slug=slug,
                     name=slug,
-                    status="connected",
+                    status=(
+                        "connected"
+                        if item.get("status") == "ACTIVE" and not item.get("is_disabled")
+                        else "pending"
+                        if item.get("status") in {"INITIATED", "INITIALIZING"}
+                        else "reconnect"
+                    ),
                     account_id=str(item.get("id") or ""),
                 )
             )
         return apps
 
-    async def create_link(self, user_key: str, slug: str) -> str:
+    async def complete_auth(self, user_key: str, session_uri: str) -> str:
+        data = await self._request(
+            "POST",
+            "/connected_accounts/complete_auth",
+            json={"user_id": user_key, "session_uri": session_uri},
+        )
+        return _require_slug(str(data.get("toolkit_slug") or ""))
+
+    async def create_link(
+        self, user_key: str, slug: str, *, callback_url: str | None = None
+    ) -> str:
         auth_config_id = await self._auth_config(slug)
         data = await self._request(
             "POST",
             "/connected_accounts/link",
-            json={"auth_config_id": auth_config_id, "user_id": user_key},
+            json={
+                "auth_config_id": auth_config_id,
+                "user_id": user_key,
+                **({"callback_url": callback_url} if callback_url else {}),
+            },
         )
         url = data.get("redirect_url")
         if not isinstance(url, str) or not url.startswith("https://"):
@@ -397,16 +470,11 @@ class ComposioClient:
             raise ConnectorError("Couldn't reach the connector service.") from error
         if response.status_code >= 400:
             message = _composio_message(response)
-            slug, detail = _composio_error_fields(response)
             log.warning(
                 "composio_request_rejected",
                 method=method,
                 path=path,
                 status=response.status_code,
-                error_slug=slug,
-                error_detail=detail,
-                key_prefix=self.api_key.split("_", 1)[0],
-                key_length=len(self.api_key),
             )
             raise ConnectorError(message, status=response.status_code)
         if not response.content:
@@ -498,7 +566,7 @@ class ConnectorService:
         if self.client is not None:
             await self.client.aclose()
 
-    async def snapshot(self, user_id: int) -> ConnectorSnapshot:
+    async def snapshot(self, user_id: int, *, strict: bool = False) -> ConnectorSnapshot:
         custom = tuple(await self.database.list_custom_connectors(user_id))
         local = set(await self.database.list_user_toolkits(user_id))
         connected: dict[str, AppConnector] = {}
@@ -507,6 +575,8 @@ class ConnectorService:
                 for item in await self.client.list_accounts(composio_user_key(user_id)):
                     connected[item.slug] = item
             except ConnectorError:
+                if strict:
+                    raise
                 log.warning("composio_list_failed")
         names = {slug: label for slug, label in POPULAR_APPS}
         apps: list[AppConnector] = []
@@ -555,7 +625,9 @@ class ConnectorService:
             raise ConnectorError("App connections are not configured.")
         return await self.client.get_toolkit(slug)
 
-    async def connect_link(self, user_id: int, slug: str) -> str | None:
+    async def connect_link(
+        self, user_id: int, slug: str, *, callback_url: str | None = None
+    ) -> str | None:
         slug = _require_slug(slug)
         if self.client is None:
             raise ConnectorError("App connections are not configured.")
@@ -563,7 +635,12 @@ class ConnectorService:
         if toolkit.no_auth:
             await self.database.add_user_toolkit(user_id, slug)
             await self.database.delete_composio_sessions(user_id)
+            await self.database.notify_resource(Scope("user", user_id), "connector", slug)
             return None
+        if callback_url:
+            return await self.client.create_link(
+                composio_user_key(user_id), slug, callback_url=callback_url
+            )
         return await self.client.create_link(composio_user_key(user_id), slug)
 
     async def disconnect_app(self, user_id: int, slug: str) -> None:
@@ -578,6 +655,8 @@ class ConnectorService:
         await self.database.delete_connector_shares(owner_id=user_id, kind="app", ref=slug)
         await self.database.delete_composio_sessions(user_id)
 
+        await self.database.notify_resource(Scope("user", user_id), "connector", slug)
+
     async def add_custom(
         self, user_id: int, name: str, url: str, headers: Mapping[str, str]
     ) -> CustomConnector:
@@ -589,7 +668,7 @@ class ConnectorService:
             user_id=user_id,
             name=validate_name(name),
             url=await resolve_public_https(url),
-            headers=dict(headers),
+            headers=parse_headers(json.dumps(dict(headers))),
             enabled=True,
             created_at="",
             updated_at="",
@@ -607,12 +686,18 @@ class ConnectorService:
         enabled: bool | None = None,
     ) -> CustomConnector:
         current = await self.require_custom(user_id, connector_id)
+        if url is not None and url.strip() != current.url and current.headers and headers is None:
+            raise ConnectorError(
+                "Replace or remove credentials before changing the server URL."
+            )
         updated = CustomConnector(
             id=current.id,
             user_id=user_id,
             name=validate_name(name) if name is not None else current.name,
             url=await resolve_public_https(url) if url is not None else current.url,
-            headers=dict(headers) if headers is not None else current.headers,
+            headers=parse_headers(json.dumps(dict(headers)))
+            if headers is not None
+            else current.headers,
             enabled=current.enabled if enabled is None else enabled,
             created_at=current.created_at,
             updated_at=current.updated_at,
@@ -733,12 +818,15 @@ class ConnectorService:
             tools: list[Tool] = []
             seen: set[str] = set()
             for connection in pending.connections:
+                params: MCPServerStreamableHttpParams = {
+                    "url": connection.url,
+                    "headers": connection.headers,
+                    "timeout": self.timeout_seconds,
+                }
+                if connection.label.startswith("mcp_"):
+                    params["httpx_client_factory"] = public_mcp_client
                 server = MCPServerStreamableHttp(
-                    params={
-                        "url": connection.url,
-                        "headers": connection.headers,
-                        "timeout": self.timeout_seconds,
-                    },
+                    params=params,
                     name=connection.label,
                     cache_tools_list=True,
                     client_session_timeout_seconds=self.timeout_seconds,

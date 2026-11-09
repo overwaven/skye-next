@@ -221,6 +221,7 @@ async def run() -> None:
     dispatcher = Dispatcher()
     conversations = ConversationService(database, threads)
     memory = MemoryService(database)
+    await database.configure_connector_encryption(config.skye_connector_encryption_key)
     custom_agents = CustomAgentService(database)
     composio = ComposioClient(config.composio_api_key) if config.composio_api_key else None
     if config.composio_api_key:

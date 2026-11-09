@@ -11,6 +11,7 @@ dependencies = [
     "aiosqlite>=0.21.0",
     "authlib>=1.6.6",
     "av>=18.1.0",
+    "cryptography>=46",
     "fal-client>=1.0.3",
     "faster-whisper>=1.2.1",
     "httpx>=0.28.0",

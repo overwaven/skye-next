@@ -18,11 +18,13 @@ from pydantic import ValidationError
 
 from .access import AccessService
 from .config import Settings
+from .connectors import ConnectorError, ConnectorService
 from .db import Database
 from .library import MediaLibrary
 from .models import Scope, TelegramProject
 from .quota import AllowanceError
 from .runtime import AgentRuntime
+from .skills import SkillError
 from .telegram_projects import (
     DEFAULT_EMOJI,
     MAX_PROJECTS,
@@ -47,6 +49,7 @@ from .web_contracts import (
     PreferencesRecord,
     ProjectCreate,
     ProjectRecord,
+    ProjectUpdate,
     RunDetails,
     SendRequest,
     Snapshot,
@@ -55,6 +58,7 @@ from .web_contracts import (
 )
 from .web_events import WebEventStore, activity_record, run_status
 from .web_media import WebMediaStore
+from .web_resources import mount_resources
 from .web_turns import WebTurnRunner
 
 Handler = Callable[[web.Request], Awaitable[web.StreamResponse]]
@@ -64,8 +68,9 @@ TURN_SERVICE = web.AppKey("turn_service", TurnService)
 class LoginLimiter:
     """Bounded process-local rate limit; ingress must also limit public traffic."""
 
-    def __init__(self) -> None:
+    def __init__(self, limit: int = 10) -> None:
         self._buckets: OrderedDict[str, tuple[float, int]] = OrderedDict()
+        self.limit = limit
 
     def allow(self, key: str) -> bool:
         now = time.monotonic()
@@ -75,16 +80,12 @@ class LoginLimiter:
         self._buckets[key] = began, count + 1
         while len(self._buckets) > 2000:
             self._buckets.popitem(last=False)
-        return count < 10
+        return count < self.limit
 
 
-async def _sse(
-    response: web.StreamResponse, event: str, cursor: str, data: dict[str, Any]
-) -> None:
+async def _sse(response: web.StreamResponse, event: str, cursor: str, data: dict[str, Any]) -> None:
     payload = json.dumps(data, separators=(",", ":"))
-    await response.write(
-        f"id: {cursor}\nevent: {event}\ndata: {payload}\n\n".encode()
-    )
+    await response.write(f"id: {cursor}\nevent: {event}\ndata: {payload}\n\n".encode())
 
 
 def create_app(
@@ -98,6 +99,7 @@ def create_app(
     runtime: AgentRuntime | None = None,
     files: MediaLibrary | None = None,
     events: WebEventStore | None = None,
+    connectors: ConnectorService | None = None,
 ) -> web.Application:
     origin = config.skye_web_origin or ""
     parsed = urlsplit(origin)
@@ -123,6 +125,7 @@ def create_app(
     limiter = LoginLimiter()
     audio_limiter = LoginLimiter()
     upload_limiter = LoginLimiter()
+    resource_limiter = LoginLimiter(60)
     media = WebMediaStore(database, files) if files is not None else None
     runner = (
         WebTurnRunner(
@@ -177,6 +180,10 @@ def create_app(
                 if await access.banned(current.user_id):
                     raise web.HTTPForbidden()
                 request["session"] = current
+                if request.path.startswith(
+                    ("/api/v1/skills", "/api/v1/connectors", "/api/v1/memories")
+                ) and not resource_limiter.allow(str(current.user_id)):
+                    raise web.HTTPTooManyRequests()
                 if request.method not in {"GET", "HEAD", "OPTIONS"} and (
                     request.headers.get("Origin") != origin
                     or not hmac.compare_digest(
@@ -214,6 +221,14 @@ def create_app(
                     retriable=error.status == 429,
                 )
                 response = web.json_response(payload.model_dump(), status=error.status)
+        except (ConnectorError, SkillError) as error:
+            payload = APIError(
+                code="validation",
+                message=str(error),
+                recovery="Review the details and try again.",
+                request_id=request_id,
+            )
+            response = web.json_response(payload.model_dump(), status=400)
         except LookupError, ValueError, ValidationError:
             payload = APIError(
                 code="validation",
@@ -378,6 +393,42 @@ def create_app(
             status=201,
         )
 
+    async def update_project(request: web.Request) -> web.Response:
+        payload = ProjectUpdate.model_validate(await request.json())
+        owner = session(request).user_id
+        project_id = request.match_info["project_id"]
+        name = " ".join(payload.name.split())
+        emoji = parse_standalone_emoji(payload.emoji)
+        if not name or emoji is None:
+            raise ValueError("A project needs a name and a single emoji")
+        async with database.transaction() as conn:
+            row = await (
+                await conn.execute(
+                    "SELECT revision FROM telegram_projects "
+                    "WHERE id=? AND user_id=? AND kind='custom'",
+                    (project_id, owner),
+                )
+            ).fetchone()
+            if row is None:
+                raise web.HTTPNotFound()
+            if int(row["revision"]) != payload.revision:
+                raise web.HTTPConflict(text="Project changed. Reopen it before saving.")
+            await conn.execute(
+                "UPDATE telegram_projects SET name=?,emoji=?,instructions=?,"
+                "updated_at=CURRENT_TIMESTAMP WHERE id=? AND user_id=?",
+                (name, emoji, payload.instructions.strip(), project_id, owner),
+            )
+        await threads.publish_resource(Scope("user", owner), "project", project_id)
+        return web.json_response(
+            ProjectRecord(
+                id=project_id,
+                name=name,
+                emoji=emoji,
+                instructions=payload.instructions.strip(),
+                revision=payload.revision + 1,
+            ).model_dump()
+        )
+
     async def delete_thread(request: web.Request) -> web.Response:
         await threads.delete(session(request).user_id, request.match_info["thread_id"])
         return web.json_response({"deleted": True})
@@ -423,9 +474,7 @@ def create_app(
 
     async def create_thread(request: web.Request) -> web.Response:
         payload = ThreadCreate.model_validate(await request.json())
-        thread = await threads.create(
-            session(request).user_id, payload.project_id, payload.title
-        )
+        thread = await threads.create(session(request).user_id, payload.project_id, payload.title)
         return web.json_response(thread.record.model_dump(), status=201)
 
     async def update_thread(request: web.Request) -> web.Response:
@@ -494,9 +543,7 @@ def create_app(
         )
 
     async def thread_state(request: web.Request) -> web.Response:
-        snapshot = await snapshot_for(
-            session(request).user_id, request.match_info["thread_id"]
-        )
+        snapshot = await snapshot_for(session(request).user_id, request.match_info["thread_id"])
         return web.json_response(snapshot.model_dump())
 
     async def media_list(request: web.Request) -> web.Response:
@@ -513,9 +560,7 @@ def create_app(
         if not data or len(data) > config.skye_max_attachment_bytes:
             raise ValueError("The file is empty or too large")
         name = request.headers.get("X-Skye-File-Name", "File")
-        ref = await media.save(
-            user_id, name, request.headers.get("Content-Type", ""), data
-        )
+        ref = await media.save(user_id, name, request.headers.get("Content-Type", ""), data)
         return web.json_response(ref.record.model_dump(), status=201)
 
     async def download_media(request: web.Request) -> web.Response:
@@ -524,9 +569,7 @@ def create_app(
         user_id = session(request).user_id
         try:
             try:
-                ref, data = await media.read_canonical(
-                    user_id, request.match_info["media_id"]
-                )
+                ref, data = await media.read_canonical(user_id, request.match_info["media_id"])
             except LookupError:
                 ref, data = await media.read(user_id, request.match_info["media_id"])
         except LookupError as error:
@@ -548,9 +591,7 @@ def create_app(
     async def delete_media(request: web.Request) -> web.Response:
         if media is None:
             raise web.HTTPServiceUnavailable()
-        removed = await media.delete(
-            session(request).user_id, request.match_info["media_id"]
-        )
+        removed = await media.delete(session(request).user_id, request.match_info["media_id"])
         if not removed:
             raise web.HTTPNotFound()
         return web.json_response({"deleted": True})
@@ -600,17 +641,62 @@ def create_app(
                     }:
                         continue
                     cursor = stored.id
-                    await _sse(response, stored.type, str(stored.id), {
-                        "version": 1,
-                        "cursor": str(stored.id),
-                        "data": stored.payload,
-                    })
-        except (asyncio.CancelledError, ConnectionResetError):
+                    await _sse(
+                        response,
+                        stored.type,
+                        str(stored.id),
+                        {
+                            "version": 1,
+                            "cursor": str(stored.id),
+                            "data": stored.payload,
+                        },
+                    )
+        except asyncio.CancelledError, ConnectionResetError:
             pass
         finally:
             events.unsubscribe(scope, queue)
         return response
 
+    async def resource_events(request: web.Request) -> web.StreamResponse:
+        if events is None:
+            raise web.HTTPServiceUnavailable()
+        owner = session(request).user_id
+        scope = Scope("user", owner)
+        queue = events.subscribe(scope)
+        cursor = await events.latest(scope)
+        response = web.StreamResponse(
+            headers={
+                "Content-Type": "text/event-stream",
+                "Cache-Control": "no-store",
+                "X-Accel-Buffering": "no",
+                "X-Content-Type-Options": "nosniff",
+            }
+        )
+        try:
+            await response.prepare(request)
+            await response.write(b"event: ready\ndata: {}\n\n")
+            while True:
+                current = await auth.session(request.cookies.get(SESSION_COOKIE, ""))
+                if current is None or current.user_id != owner or await access.banned(owner):
+                    break
+                rows = await events.replay(scope, cursor)
+                for stored in rows:
+                    cursor = stored.id
+                    if stored.type == "resource.changed":
+                        async with asyncio.timeout(10):
+                            await _sse(response, "resource.changed", str(cursor), stored.payload)
+                if len(rows) >= 500:
+                    continue
+                try:
+                    await asyncio.wait_for(queue.get(), timeout=15)
+                except TimeoutError:
+                    async with asyncio.timeout(10):
+                        await response.write(b": ping\n\n")
+        except asyncio.CancelledError, ConnectionResetError, TimeoutError:
+            pass
+        finally:
+            events.unsubscribe(scope, queue)
+        return response
 
         row = await database.fetch_one(
             "SELECT r.* FROM canonical_runs r JOIN threads t "
@@ -670,7 +756,7 @@ def create_app(
 
     app = web.Application(
         middlewares=[security],
-        client_max_size=max(32_768, config.skye_max_attachment_bytes + 1_048_576),
+        client_max_size=max(32_768, config.skye_max_attachment_bytes * 4 // 3 + 1_048_576),
     )
     if turns is not None:
         # Stage 4 will expose sending; use the *same instance* as Telegram so
@@ -683,8 +769,22 @@ def create_app(
     app.router.add_post("/api/v1/auth/logout/all", logout)
     app.router.add_get("/api/v1/capabilities", capabilities)
     app.router.add_get("/api/v1/preferences", preferences)
+    app.router.add_get("/api/v1/resources/events", resource_events)
+    mount_resources(
+        app,
+        database,
+        threads,
+        session,
+        connectors
+        or (runtime.connectors if runtime is not None and hasattr(runtime, "connectors") else None)
+        or ConnectorService(database, None),
+        config.skye_max_attachment_bytes,
+        origin,
+        config.skye_composio_verifier_enabled,
+    )
     app.router.add_get("/api/v1/projects", projects)
     app.router.add_post("/api/v1/projects", create_project)
+    app.router.add_patch("/api/v1/projects/{project_id}", update_project)
     app.router.add_get("/api/v1/threads", list_threads)
     app.router.add_post("/api/v1/threads", create_thread)
     app.router.add_get("/api/v1/threads/{thread_id}", get_thread)

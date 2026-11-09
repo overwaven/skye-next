@@ -3,6 +3,7 @@ from __future__ import annotations
 import io
 import re
 import sqlite3
+import stat
 import uuid
 import zipfile
 from collections.abc import Mapping, Sequence
@@ -108,6 +109,7 @@ def _read_zip(data: bytes, *, max_bytes: int) -> dict[str, bytes]:
     if not zipfile.is_zipfile(buffer):
         raise SkillError("That file is not a valid zip archive.")
     members: dict[str, bytes] = {}
+    total = 0
     with zipfile.ZipFile(buffer) as archive:
         infos = [item for item in archive.infolist() if not item.is_dir()]
         if len(infos) > MAX_FILES:
@@ -116,9 +118,18 @@ def _read_zip(data: bytes, *, max_bytes: int) -> dict[str, bytes]:
             if _skip_member(item.filename):
                 continue
             path = _safe_member(item.filename)
+            if path in members or item.flag_bits & 1:
+                raise SkillError("That zip contains duplicate or encrypted files.")
+            mode = item.external_attr >> 16
+            if stat.S_ISLNK(mode):
+                raise SkillError("Skill archives cannot contain symbolic links.")
             if item.file_size > MAX_FILE_BYTES:
                 raise SkillError("A skill file must be at most 25 MB uncompressed.")
-            payload = archive.read(item)
+            total += item.file_size
+            if total > max_bytes * 2:
+                raise SkillError("That zip expands to more than Skye can store.")
+            with archive.open(item) as source:
+                payload = source.read(min(MAX_FILE_BYTES, max_bytes * 2) + 1)
             if len(payload) > MAX_FILE_BYTES:
                 raise SkillError("A skill file must be at most 25 MB uncompressed.")
             members[path] = payload
@@ -246,9 +257,7 @@ class SkillService:
                 )
             )
         except sqlite3.IntegrityError as error:
-            raise SkillError(
-                f"A skill named `{bundle.name}` is already in this chat."
-            ) from error
+            raise SkillError(f"A skill named `{bundle.name}` is already in this chat.") from error
 
     async def delete(self, scope: Scope, skill_id: str) -> Skill:
         removed = await self.database.delete_skill(scope, skill_id)
@@ -405,5 +414,3 @@ class SkillPanel:
         if text.startswith("---"):
             return "SKILL.md", text.encode("utf-8")
         raise SkillError("Send a `.zip` archive or a `SKILL.md` file.")
-
-

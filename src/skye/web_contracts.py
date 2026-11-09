@@ -51,6 +51,10 @@ class ProjectCreate(Contract):
     instructions: str = Field(default="", max_length=12_000)
 
 
+class ProjectUpdate(ProjectCreate):
+    revision: int = Field(ge=1)
+
+
 class ThreadRecord(Contract):
     id: str
     project_id: str | None
@@ -233,6 +237,66 @@ class Snapshot(Contract):
     cursor: str = "0"
 
 
+class MemoryWrite(Contract):
+    content: str = Field(min_length=1, max_length=500)
+    category: Literal["personal", "preference", "instruction", "project", "other"] = "other"
+    revision: int | None = Field(default=None, ge=1)
+
+
+class MemoryRecord(MemoryWrite):
+    id: int
+    revision: int
+
+
+class MemoryPreference(Contract):
+    memory_enabled: bool
+
+
+class ConnectorWrite(Contract):
+    name: str = Field(min_length=1, max_length=64)
+    url: str = Field(max_length=2048)
+    headers: str | None = Field(default=None, max_length=35000)
+
+
+class ConnectorVerification(Contract):
+    session_uri: str = Field(min_length=1, max_length=4096)
+
+
+class ConnectorRecord(Contract):
+    id: str
+    name: str
+    kind: Literal["app", "custom"]
+    status: str
+    url: str = ""
+    credential_names: list[str] = Field(default_factory=list)
+
+
+class SkillUpload(Contract):
+    filename: str = Field(min_length=1, max_length=200)
+    content: str | None = None
+    base64: str | None = None
+
+
+class SkillRecord(Contract):
+    id: str = ""
+    name: str
+    description: str
+    files: list[str] = Field(default_factory=list)
+    instructions: str = ""
+
+
+class ResourceSnapshot(Contract):
+    scope: Literal["personal_account"] = "personal_account"
+    memory_enabled: bool
+    memories: list[MemoryRecord] = Field(default_factory=list)
+    connectors: list[ConnectorRecord] = Field(default_factory=list)
+    skills: list[SkillRecord] = Field(default_factory=list)
+    apps_configured: bool = False
+    app_consent_enabled: bool = False
+    credentials_configured: bool = False
+    provider_verified: bool = False
+
+
 class WebContract(Contract):
     """Schema-generation root, not an actual API response."""
 
@@ -258,3 +322,9 @@ class WebContract(Contract):
     capabilities: Capabilities
     preferences: PreferencesRecord
     run_details: RunDetails
+    resources: ResourceSnapshot
+    memory_write: MemoryWrite
+    connector_write: ConnectorWrite
+    connector_verification: ConnectorVerification
+    skill_upload: SkillUpload
+    skill_record: SkillRecord

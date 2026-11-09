@@ -5,7 +5,7 @@
     {
       "step": "thread.created",
       "ok": true,
-      "thread_id": "4a3f11dee6b44a24ad7610830dd2e1a3"
+      "thread_id": "05e0750c40c44440b98727b2164071c3"
     },
     {
       "step": "state.empty",
@@ -18,7 +18,7 @@
     {
       "step": "send.sse",
       "ok": true,
-      "run": "4d3baa65ce58471792fae23c4355675f",
+      "run": "9d380483d2bc40fca1ae94f47b616921",
       "events": [
         "run.changed",
         "message.created",
@@ -33,17 +33,17 @@
     {
       "step": "media.upload",
       "ok": true,
-      "media_id": "dd6f7396d9204a0c92daeb4614c830c9"
+      "media_id": "33bcb200e8d1470fad94956805c46c7b"
     },
     {
       "step": "media.sent",
       "ok": true,
-      "part": "58af2bd3bb1e443ea7b5ef5bb047a993"
+      "part": "c4c3e72f41754c14bf1ebfde466b21ad"
     },
     {
       "step": "voice.transcribed",
       "ok": true,
-      "media_id": "922b7c14ae7d41f19a2c93922b85aafc"
+      "media_id": "db2db445b84e4f36a6ab0a925d3508e4"
     },
     {
       "step": "thread.renamed",
@@ -52,7 +52,7 @@
     {
       "step": "run.stopped",
       "ok": true,
-      "run": "5dffdd17934942bab2194039c6ca21ef"
+      "run": "17430545188f484caa180d5aebb4e98e"
     },
     {
       "step": "thread.archived",
@@ -66,11 +66,17 @@
     {
       "step": "project.created",
       "ok": true,
-      "project_id": "4a4b4892fd49482e"
+      "project_id": "a023eb2e69ed41f7"
+    },
+    {
+      "step": "project.edited",
+      "ok": true,
+      "stale_status": 409,
+      "missing_status": 404
     }
   ],
   "counts": {
-    "steps": 12,
+    "steps": 13,
     "sse_events": 7
   }
 }

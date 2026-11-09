@@ -69,6 +69,8 @@ SandboxDomains = Annotated[tuple[str, ...], NoDecode, BeforeValidator(_domains)]
 
 
 class Settings(BaseSettings):
+    skye_connector_encryption_key: str | None = None
+    skye_composio_verifier_enabled: bool = False
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
     telegram_bot_token: str = Field(min_length=1)

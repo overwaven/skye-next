@@ -1,0 +1,12 @@
+node_modules
+.next
+.git
+.github
+.taste-skill
+test-results
+playwright-report
+coverage
+docs
+*.log
+.env*
+README.md

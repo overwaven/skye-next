@@ -131,7 +131,7 @@ class CustomConnector:
 class AppConnector:
     slug: str
     name: str
-    status: Literal["connected", "pending", "available"]
+    status: Literal["connected", "pending", "available", "reconnect"]
     account_id: str | None = None
     no_auth: bool = False
     description: str = ""

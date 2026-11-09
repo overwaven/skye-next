@@ -757,6 +757,15 @@ Dependencies: Stage 4 API/events; Stage 5 uploads for Skills. Required for core 
 - [ ] Context panel shows effective resources and safe actual-use evidence.
 - [ ] Resource changes from web are visible/usable in Telegram and vice versa without re-login.
 
+Implementation, 2026-11-09: Memory and Skills management, connector catalog/custom MCP,
+safe runtime activity and resource invalidation are implemented and deployed as a gated
+operator alpha. See `docs/web-stage6.md` and `docs/web-stage6-e2e.json`. Web app consent
+remains disabled until the Composio project-wide identity-verifier and Telegram
+compatibility gates are met; MCP credential editing remains disabled until an operator
+configures and backs up the encryption key. The real-provider and cross-channel acceptance
+scenarios and two-real-account privacy gate have not been demonstrated. Stage 6 remains
+incomplete; checkboxes and the exit gate are intentionally not marked passed.
+
 **Exit:** configure each resource in one channel, use it in the other; revoke a connector
 and receive a correct recovery action, reject malicious archives/SSRF targets, and verify
 personal/project scope labels match runtime behavior.

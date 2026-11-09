@@ -209,9 +209,7 @@ async def main() -> None:
         assert snapshot["messages"] == []
         report("state.empty")
 
-        stream = await client.get(
-            f"{base}/api/v1/threads/{thread['id']}/events", headers=headers
-        )
+        stream = await client.get(f"{base}/api/v1/threads/{thread['id']}/events", headers=headers)
         first = await asyncio.wait_for(next_event(stream), timeout=3)
         assert first is not None and first["event"] == "snapshot"
         report("sse.snapshot")
@@ -274,9 +272,7 @@ async def main() -> None:
         )
         assert upload.status == 201, await upload.text()
         media = await upload.json()
-        async with client.get(
-            f"{base}/api/v1/media/{media['id']}", headers=headers
-        ) as response:
+        async with client.get(f"{base}/api/v1/media/{media['id']}", headers=headers) as response:
             assert response.status == 200 and await response.read() == PNG
         report("media.upload", media_id=media["id"])
 
@@ -392,9 +388,7 @@ async def main() -> None:
             f"{base}/api/v1/threads/{extra_thread['id']}", headers=write_headers()
         )
         assert deleted.status == 200, await deleted.text()
-        missing = await client.get(
-            f"{base}/api/v1/threads/{extra_thread['id']}", headers=headers
-        )
+        missing = await client.get(f"{base}/api/v1/threads/{extra_thread['id']}", headers=headers)
         assert missing.status == 404
         report("thread.deleted")
 
@@ -409,10 +403,43 @@ async def main() -> None:
         assert created_project["name"] == "Web project"
         listed = await client.get(f"{base}/api/v1/threads", headers=headers)
         assert any(
-            item["project_id"] == created_project["id"]
-            for item in (await listed.json())["threads"]
+            item["project_id"] == created_project["id"] for item in (await listed.json())["threads"]
         )
         report("project.created", project_id=created_project["id"])
+
+        project_url = f"{base}/api/v1/projects/{created_project['id']}"
+        edited = await client.patch(
+            project_url,
+            headers=write_headers(),
+            json={
+                "name": "Edited project",
+                "emoji": "💻",
+                "instructions": "New instructions",
+                "revision": created_project["revision"],
+            },
+        )
+        assert edited.status == 200, await edited.text()
+        saved = await edited.json()
+        assert saved["name"] == "Edited project" and saved["emoji"] == "💻"
+        assert saved["instructions"] == "New instructions"
+        stale = await client.patch(
+            project_url,
+            headers=write_headers(),
+            json={
+                "name": "Stale overwrite",
+                "emoji": "☁️",
+                "instructions": "",
+                "revision": created_project["revision"],
+            },
+        )
+        assert stale.status == 409
+        hidden = await client.patch(
+            f"{base}/api/v1/projects/missing",
+            headers=write_headers(),
+            json={"name": "No access", "emoji": "☁️", "instructions": "", "revision": 1},
+        )
+        assert hidden.status == 404
+        report("project.edited", stale_status=stale.status, missing_status=hidden.status)
 
     artifact = {
         "version": 1,
@@ -420,9 +447,7 @@ async def main() -> None:
         "steps": steps,
         "counts": {"steps": len(steps), "sse_events": len(seen)},
     }
-    Path("docs/web-stage45-e2e.json").write_text(
-        json.dumps(artifact, indent=2) + "\n"
-    )
+    Path("docs/web-stage45-e2e.json").write_text(json.dumps(artifact, indent=2) + "\n")
     print(json.dumps(artifact, indent=2))
     await app_runner.cleanup()
     await database.close()

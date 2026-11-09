@@ -1,0 +1,1541 @@
+{
+  "$defs": {
+    "APIError": {
+      "additionalProperties": false,
+      "properties": {
+        "code": {
+          "enum": [
+            "unauthenticated",
+            "forbidden",
+            "not_found",
+            "conflict",
+            "busy",
+            "quota",
+            "unavailable",
+            "provider_error",
+            "interrupted",
+            "validation",
+            "cursor_expired"
+          ],
+          "title": "Code",
+          "type": "string"
+        },
+        "field_errors": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "title": "Field Errors",
+          "type": "object"
+        },
+        "message": {
+          "title": "Message",
+          "type": "string"
+        },
+        "recovery": {
+          "title": "Recovery",
+          "type": "string"
+        },
+        "request_id": {
+          "title": "Request Id",
+          "type": "string"
+        },
+        "retriable": {
+          "default": false,
+          "title": "Retriable",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "code",
+        "message",
+        "recovery",
+        "request_id"
+      ],
+      "title": "APIError",
+      "type": "object"
+    },
+    "ActivityEvent": {
+      "additionalProperties": false,
+      "properties": {
+        "activity": {
+          "$ref": "#/$defs/ActivityRecord"
+        },
+        "run_id": {
+          "title": "Run Id",
+          "type": "string"
+        },
+        "type": {
+          "const": "run.activity",
+          "default": "run.activity",
+          "title": "Type",
+          "type": "string"
+        }
+      },
+      "required": [
+        "run_id",
+        "activity"
+      ],
+      "title": "ActivityEvent",
+      "type": "object"
+    },
+    "ActivityRecord": {
+      "additionalProperties": false,
+      "properties": {
+        "category": {
+          "enum": [
+            "web",
+            "image",
+            "voice",
+            "code",
+            "memory",
+            "connector",
+            "automation",
+            "tool"
+          ],
+          "title": "Category",
+          "type": "string"
+        },
+        "label": {
+          "default": "",
+          "title": "Label",
+          "type": "string"
+        },
+        "sequence": {
+          "minimum": 1,
+          "title": "Sequence",
+          "type": "integer"
+        },
+        "status": {
+          "enum": [
+            "running",
+            "completed",
+            "failed"
+          ],
+          "title": "Status",
+          "type": "string"
+        },
+        "tool_id": {
+          "default": "",
+          "title": "Tool Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "sequence",
+        "category",
+        "status"
+      ],
+      "title": "ActivityRecord",
+      "type": "object"
+    },
+    "Capabilities": {
+      "additionalProperties": false,
+      "properties": {
+        "payments": {
+          "const": "telegram_stars",
+          "default": "telegram_stars",
+          "title": "Payments",
+          "type": "string"
+        },
+        "private_only": {
+          "const": true,
+          "default": true,
+          "title": "Private Only",
+          "type": "boolean"
+        },
+        "resources": {
+          "const": "account_wide",
+          "default": "account_wide",
+          "title": "Resources",
+          "type": "string"
+        },
+        "retention": {
+          "const": "until_explicit_deletion",
+          "default": "until_explicit_deletion",
+          "title": "Retention",
+          "type": "string"
+        },
+        "send": {
+          "const": true,
+          "default": true,
+          "title": "Send",
+          "type": "boolean"
+        },
+        "uploads": {
+          "const": true,
+          "default": true,
+          "title": "Uploads",
+          "type": "boolean"
+        },
+        "version": {
+          "const": 1,
+          "default": 1,
+          "title": "Version",
+          "type": "integer"
+        },
+        "voice": {
+          "const": true,
+          "default": true,
+          "title": "Voice",
+          "type": "boolean"
+        }
+      },
+      "title": "Capabilities",
+      "type": "object"
+    },
+    "ConnectorRecord": {
+      "additionalProperties": false,
+      "properties": {
+        "credential_names": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Credential Names",
+          "type": "array"
+        },
+        "id": {
+          "title": "Id",
+          "type": "string"
+        },
+        "kind": {
+          "enum": [
+            "app",
+            "custom"
+          ],
+          "title": "Kind",
+          "type": "string"
+        },
+        "name": {
+          "title": "Name",
+          "type": "string"
+        },
+        "status": {
+          "title": "Status",
+          "type": "string"
+        },
+        "url": {
+          "default": "",
+          "title": "Url",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "name",
+        "kind",
+        "status"
+      ],
+      "title": "ConnectorRecord",
+      "type": "object"
+    },
+    "ConnectorVerification": {
+      "additionalProperties": false,
+      "properties": {
+        "session_uri": {
+          "maxLength": 4096,
+          "minLength": 1,
+          "title": "Session Uri",
+          "type": "string"
+        }
+      },
+      "required": [
+        "session_uri"
+      ],
+      "title": "ConnectorVerification",
+      "type": "object"
+    },
+    "ConnectorWrite": {
+      "additionalProperties": false,
+      "properties": {
+        "headers": {
+          "anyOf": [
+            {
+              "maxLength": 35000,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Headers"
+        },
+        "name": {
+          "maxLength": 64,
+          "minLength": 1,
+          "title": "Name",
+          "type": "string"
+        },
+        "url": {
+          "maxLength": 2048,
+          "title": "Url",
+          "type": "string"
+        }
+      },
+      "required": [
+        "name",
+        "url"
+      ],
+      "title": "ConnectorWrite",
+      "type": "object"
+    },
+    "EventEnvelope": {
+      "additionalProperties": false,
+      "properties": {
+        "cursor": {
+          "title": "Cursor",
+          "type": "string"
+        },
+        "data": {
+          "discriminator": {
+            "mapping": {
+              "message.created": "#/$defs/MessageEvent",
+              "resource.changed": "#/$defs/ResourceEvent",
+              "run.activity": "#/$defs/ActivityEvent",
+              "run.changed": "#/$defs/RunEvent"
+            },
+            "propertyName": "type"
+          },
+          "oneOf": [
+            {
+              "$ref": "#/$defs/RunEvent"
+            },
+            {
+              "$ref": "#/$defs/ActivityEvent"
+            },
+            {
+              "$ref": "#/$defs/MessageEvent"
+            },
+            {
+              "$ref": "#/$defs/ResourceEvent"
+            }
+          ],
+          "title": "Data"
+        },
+        "version": {
+          "const": 1,
+          "default": 1,
+          "title": "Version",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "cursor",
+        "data"
+      ],
+      "title": "EventEnvelope",
+      "type": "object"
+    },
+    "FilePart": {
+      "additionalProperties": false,
+      "properties": {
+        "availability": {
+          "enum": [
+            "available",
+            "expired",
+            "unresolved"
+          ],
+          "title": "Availability",
+          "type": "string"
+        },
+        "file_id": {
+          "title": "File Id",
+          "type": "string"
+        },
+        "media_type": {
+          "title": "Media Type",
+          "type": "string"
+        },
+        "name": {
+          "title": "Name",
+          "type": "string"
+        },
+        "type": {
+          "const": "file",
+          "default": "file",
+          "title": "Type",
+          "type": "string"
+        }
+      },
+      "required": [
+        "file_id",
+        "name",
+        "media_type",
+        "availability"
+      ],
+      "title": "FilePart",
+      "type": "object"
+    },
+    "MediaList": {
+      "additionalProperties": false,
+      "properties": {
+        "media": {
+          "items": {
+            "$ref": "#/$defs/MediaRecord"
+          },
+          "title": "Media",
+          "type": "array"
+        }
+      },
+      "required": [
+        "media"
+      ],
+      "title": "MediaList",
+      "type": "object"
+    },
+    "MediaRecord": {
+      "additionalProperties": false,
+      "properties": {
+        "availability": {
+          "default": "available",
+          "enum": [
+            "available",
+            "expired"
+          ],
+          "title": "Availability",
+          "type": "string"
+        },
+        "created_at": {
+          "minimum": 0,
+          "title": "Created At",
+          "type": "number"
+        },
+        "id": {
+          "title": "Id",
+          "type": "string"
+        },
+        "is_image": {
+          "default": false,
+          "title": "Is Image",
+          "type": "boolean"
+        },
+        "media_type": {
+          "maxLength": 128,
+          "minLength": 1,
+          "title": "Media Type",
+          "type": "string"
+        },
+        "name": {
+          "maxLength": 200,
+          "minLength": 1,
+          "title": "Name",
+          "type": "string"
+        },
+        "size": {
+          "minimum": 0,
+          "title": "Size",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "id",
+        "name",
+        "media_type",
+        "size",
+        "created_at"
+      ],
+      "title": "MediaRecord",
+      "type": "object"
+    },
+    "MemoryRecord": {
+      "additionalProperties": false,
+      "properties": {
+        "category": {
+          "default": "other",
+          "enum": [
+            "personal",
+            "preference",
+            "instruction",
+            "project",
+            "other"
+          ],
+          "title": "Category",
+          "type": "string"
+        },
+        "content": {
+          "maxLength": 500,
+          "minLength": 1,
+          "title": "Content",
+          "type": "string"
+        },
+        "id": {
+          "title": "Id",
+          "type": "integer"
+        },
+        "revision": {
+          "title": "Revision",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "content",
+        "revision",
+        "id"
+      ],
+      "title": "MemoryRecord",
+      "type": "object"
+    },
+    "MemoryWrite": {
+      "additionalProperties": false,
+      "properties": {
+        "category": {
+          "default": "other",
+          "enum": [
+            "personal",
+            "preference",
+            "instruction",
+            "project",
+            "other"
+          ],
+          "title": "Category",
+          "type": "string"
+        },
+        "content": {
+          "maxLength": 500,
+          "minLength": 1,
+          "title": "Content",
+          "type": "string"
+        },
+        "revision": {
+          "anyOf": [
+            {
+              "minimum": 1,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Revision"
+        }
+      },
+      "required": [
+        "content"
+      ],
+      "title": "MemoryWrite",
+      "type": "object"
+    },
+    "MessageEvent": {
+      "additionalProperties": false,
+      "properties": {
+        "message": {
+          "$ref": "#/$defs/VisibleMessage"
+        },
+        "type": {
+          "const": "message.created",
+          "default": "message.created",
+          "title": "Type",
+          "type": "string"
+        }
+      },
+      "required": [
+        "message"
+      ],
+      "title": "MessageEvent",
+      "type": "object"
+    },
+    "MessagePage": {
+      "additionalProperties": false,
+      "properties": {
+        "legacy_history": {
+          "default": "not_backfilled",
+          "enum": [
+            "not_backfilled",
+            "partial",
+            "empty"
+          ],
+          "title": "Legacy History",
+          "type": "string"
+        },
+        "messages": {
+          "items": {
+            "$ref": "#/$defs/VisibleMessage"
+          },
+          "title": "Messages",
+          "type": "array"
+        },
+        "older_than": {
+          "anyOf": [
+            {
+              "minimum": 1,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Older Than"
+        }
+      },
+      "required": [
+        "messages"
+      ],
+      "title": "MessagePage",
+      "type": "object"
+    },
+    "PreferencesRecord": {
+      "additionalProperties": false,
+      "properties": {
+        "image_model": {
+          "title": "Image Model",
+          "type": "string"
+        },
+        "memory_enabled": {
+          "title": "Memory Enabled",
+          "type": "boolean"
+        },
+        "model": {
+          "title": "Model",
+          "type": "string"
+        },
+        "reasoning": {
+          "enum": [
+            "none",
+            "low",
+            "medium",
+            "high",
+            "xhigh",
+            "max"
+          ],
+          "title": "Reasoning",
+          "type": "string"
+        },
+        "sparks_display": {
+          "title": "Sparks Display",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "model",
+        "image_model",
+        "reasoning",
+        "memory_enabled",
+        "sparks_display"
+      ],
+      "title": "PreferencesRecord",
+      "type": "object"
+    },
+    "ProjectCreate": {
+      "additionalProperties": false,
+      "properties": {
+        "emoji": {
+          "default": "☁️",
+          "maxLength": 16,
+          "title": "Emoji",
+          "type": "string"
+        },
+        "instructions": {
+          "default": "",
+          "maxLength": 12000,
+          "title": "Instructions",
+          "type": "string"
+        },
+        "name": {
+          "maxLength": 64,
+          "minLength": 1,
+          "title": "Name",
+          "type": "string"
+        }
+      },
+      "required": [
+        "name"
+      ],
+      "title": "ProjectCreate",
+      "type": "object"
+    },
+    "ProjectList": {
+      "additionalProperties": false,
+      "properties": {
+        "projects": {
+          "items": {
+            "$ref": "#/$defs/ProjectRecord"
+          },
+          "title": "Projects",
+          "type": "array"
+        }
+      },
+      "required": [
+        "projects"
+      ],
+      "title": "ProjectList",
+      "type": "object"
+    },
+    "ProjectRecord": {
+      "additionalProperties": false,
+      "properties": {
+        "emoji": {
+          "default": "",
+          "maxLength": 16,
+          "title": "Emoji",
+          "type": "string"
+        },
+        "id": {
+          "title": "Id",
+          "type": "string"
+        },
+        "instructions": {
+          "maxLength": 12000,
+          "title": "Instructions",
+          "type": "string"
+        },
+        "name": {
+          "maxLength": 64,
+          "minLength": 1,
+          "title": "Name",
+          "type": "string"
+        },
+        "revision": {
+          "minimum": 1,
+          "title": "Revision",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "id",
+        "name",
+        "instructions",
+        "revision"
+      ],
+      "title": "ProjectRecord",
+      "type": "object"
+    },
+    "ResourceEvent": {
+      "additionalProperties": false,
+      "properties": {
+        "resource": {
+          "enum": [
+            "project",
+            "thread",
+            "memory",
+            "connector",
+            "skill",
+            "account"
+          ],
+          "title": "Resource",
+          "type": "string"
+        },
+        "resource_id": {
+          "title": "Resource Id",
+          "type": "string"
+        },
+        "type": {
+          "const": "resource.changed",
+          "default": "resource.changed",
+          "title": "Type",
+          "type": "string"
+        }
+      },
+      "required": [
+        "resource",
+        "resource_id"
+      ],
+      "title": "ResourceEvent",
+      "type": "object"
+    },
+    "ResourceSnapshot": {
+      "additionalProperties": false,
+      "properties": {
+        "app_consent_enabled": {
+          "default": false,
+          "title": "App Consent Enabled",
+          "type": "boolean"
+        },
+        "apps_configured": {
+          "default": false,
+          "title": "Apps Configured",
+          "type": "boolean"
+        },
+        "connectors": {
+          "items": {
+            "$ref": "#/$defs/ConnectorRecord"
+          },
+          "title": "Connectors",
+          "type": "array"
+        },
+        "credentials_configured": {
+          "default": false,
+          "title": "Credentials Configured",
+          "type": "boolean"
+        },
+        "memories": {
+          "items": {
+            "$ref": "#/$defs/MemoryRecord"
+          },
+          "title": "Memories",
+          "type": "array"
+        },
+        "memory_enabled": {
+          "title": "Memory Enabled",
+          "type": "boolean"
+        },
+        "provider_verified": {
+          "default": false,
+          "title": "Provider Verified",
+          "type": "boolean"
+        },
+        "scope": {
+          "const": "personal_account",
+          "default": "personal_account",
+          "title": "Scope",
+          "type": "string"
+        },
+        "skills": {
+          "items": {
+            "$ref": "#/$defs/SkillRecord"
+          },
+          "title": "Skills",
+          "type": "array"
+        }
+      },
+      "required": [
+        "memory_enabled"
+      ],
+      "title": "ResourceSnapshot",
+      "type": "object"
+    },
+    "RunDetails": {
+      "additionalProperties": false,
+      "properties": {
+        "activities": {
+          "items": {
+            "$ref": "#/$defs/ActivityRecord"
+          },
+          "title": "Activities",
+          "type": "array"
+        },
+        "delivery_state": {
+          "enum": [
+            "pending",
+            "complete",
+            "partial",
+            "failed"
+          ],
+          "title": "Delivery State",
+          "type": "string"
+        },
+        "run": {
+          "$ref": "#/$defs/RunStatus"
+        }
+      },
+      "required": [
+        "run",
+        "delivery_state",
+        "activities"
+      ],
+      "title": "RunDetails",
+      "type": "object"
+    },
+    "RunEvent": {
+      "additionalProperties": false,
+      "properties": {
+        "run": {
+          "$ref": "#/$defs/RunStatus"
+        },
+        "type": {
+          "const": "run.changed",
+          "default": "run.changed",
+          "title": "Type",
+          "type": "string"
+        }
+      },
+      "required": [
+        "run"
+      ],
+      "title": "RunEvent",
+      "type": "object"
+    },
+    "RunStatus": {
+      "additionalProperties": false,
+      "properties": {
+        "cost_milli": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Cost Milli"
+        },
+        "cost_state": {
+          "default": "pending",
+          "enum": [
+            "pending",
+            "settled",
+            "unknown"
+          ],
+          "title": "Cost State",
+          "type": "string"
+        },
+        "delivery_state": {
+          "default": "pending",
+          "enum": [
+            "pending",
+            "complete",
+            "partial",
+            "failed"
+          ],
+          "title": "Delivery State",
+          "type": "string"
+        },
+        "failure": {
+          "anyOf": [
+            {
+              "enum": [
+                "quota",
+                "provider",
+                "moderation",
+                "context",
+                "interrupted",
+                "unknown"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Failure"
+        },
+        "id": {
+          "title": "Id",
+          "type": "string"
+        },
+        "label": {
+          "title": "Label",
+          "type": "string"
+        },
+        "state": {
+          "enum": [
+            "accepted",
+            "running",
+            "completed",
+            "failed",
+            "cancelling",
+            "cancelled",
+            "interrupted"
+          ],
+          "title": "State",
+          "type": "string"
+        },
+        "thread_id": {
+          "title": "Thread Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "thread_id",
+        "state",
+        "label"
+      ],
+      "title": "RunStatus",
+      "type": "object"
+    },
+    "SendReceipt": {
+      "additionalProperties": false,
+      "properties": {
+        "request_id": {
+          "title": "Request Id",
+          "type": "string"
+        },
+        "run_id": {
+          "title": "Run Id",
+          "type": "string"
+        },
+        "thread_id": {
+          "title": "Thread Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "thread_id",
+        "run_id",
+        "request_id"
+      ],
+      "title": "SendReceipt",
+      "type": "object"
+    },
+    "SendRequest": {
+      "additionalProperties": false,
+      "properties": {
+        "file_ids": {
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 20,
+          "title": "File Ids",
+          "type": "array"
+        },
+        "request_id": {
+          "maxLength": 128,
+          "minLength": 16,
+          "title": "Request Id",
+          "type": "string"
+        },
+        "text": {
+          "maxLength": 32000,
+          "minLength": 1,
+          "title": "Text",
+          "type": "string"
+        },
+        "transcripts": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "title": "Transcripts",
+          "type": "object"
+        }
+      },
+      "required": [
+        "request_id",
+        "text"
+      ],
+      "title": "SendRequest",
+      "type": "object"
+    },
+    "SessionRecord": {
+      "additionalProperties": false,
+      "properties": {
+        "csrf_token": {
+          "minLength": 32,
+          "title": "Csrf Token",
+          "type": "string"
+        },
+        "user_id": {
+          "exclusiveMinimum": 0,
+          "title": "User Id",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "user_id",
+        "csrf_token"
+      ],
+      "title": "SessionRecord",
+      "type": "object"
+    },
+    "SkillRecord": {
+      "additionalProperties": false,
+      "properties": {
+        "description": {
+          "title": "Description",
+          "type": "string"
+        },
+        "files": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Files",
+          "type": "array"
+        },
+        "id": {
+          "default": "",
+          "title": "Id",
+          "type": "string"
+        },
+        "instructions": {
+          "default": "",
+          "title": "Instructions",
+          "type": "string"
+        },
+        "name": {
+          "title": "Name",
+          "type": "string"
+        }
+      },
+      "required": [
+        "name",
+        "description"
+      ],
+      "title": "SkillRecord",
+      "type": "object"
+    },
+    "SkillUpload": {
+      "additionalProperties": false,
+      "properties": {
+        "base64": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Base64"
+        },
+        "content": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Content"
+        },
+        "filename": {
+          "maxLength": 200,
+          "minLength": 1,
+          "title": "Filename",
+          "type": "string"
+        }
+      },
+      "required": [
+        "filename"
+      ],
+      "title": "SkillUpload",
+      "type": "object"
+    },
+    "Snapshot": {
+      "additionalProperties": false,
+      "properties": {
+        "activities": {
+          "items": {
+            "$ref": "#/$defs/ActivityRecord"
+          },
+          "title": "Activities",
+          "type": "array"
+        },
+        "cursor": {
+          "default": "0",
+          "title": "Cursor",
+          "type": "string"
+        },
+        "messages": {
+          "items": {
+            "$ref": "#/$defs/VisibleMessage"
+          },
+          "title": "Messages",
+          "type": "array"
+        },
+        "older_than": {
+          "anyOf": [
+            {
+              "minimum": 1,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Older Than"
+        },
+        "run": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/RunStatus"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "thread": {
+          "$ref": "#/$defs/ThreadRecord"
+        }
+      },
+      "required": [
+        "thread",
+        "messages"
+      ],
+      "title": "Snapshot",
+      "type": "object"
+    },
+    "StopReceipt": {
+      "additionalProperties": false,
+      "properties": {
+        "stopped": {
+          "title": "Stopped",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "stopped"
+      ],
+      "title": "StopReceipt",
+      "type": "object"
+    },
+    "TextPart": {
+      "additionalProperties": false,
+      "properties": {
+        "text": {
+          "title": "Text",
+          "type": "string"
+        },
+        "type": {
+          "const": "text",
+          "default": "text",
+          "title": "Type",
+          "type": "string"
+        }
+      },
+      "required": [
+        "text"
+      ],
+      "title": "TextPart",
+      "type": "object"
+    },
+    "ThreadCreate": {
+      "additionalProperties": false,
+      "properties": {
+        "project_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Project Id"
+        },
+        "title": {
+          "maxLength": 128,
+          "minLength": 1,
+          "title": "Title",
+          "type": "string"
+        }
+      },
+      "required": [
+        "title"
+      ],
+      "title": "ThreadCreate",
+      "type": "object"
+    },
+    "ThreadList": {
+      "additionalProperties": false,
+      "properties": {
+        "threads": {
+          "items": {
+            "$ref": "#/$defs/ThreadRecord"
+          },
+          "title": "Threads",
+          "type": "array"
+        }
+      },
+      "required": [
+        "threads"
+      ],
+      "title": "ThreadList",
+      "type": "object"
+    },
+    "ThreadRecord": {
+      "additionalProperties": false,
+      "properties": {
+        "archived": {
+          "default": false,
+          "title": "Archived",
+          "type": "boolean"
+        },
+        "id": {
+          "title": "Id",
+          "type": "string"
+        },
+        "project_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Project Id"
+        },
+        "revision": {
+          "minimum": 1,
+          "title": "Revision",
+          "type": "integer"
+        },
+        "title": {
+          "title": "Title",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "project_id",
+        "title",
+        "revision"
+      ],
+      "title": "ThreadRecord",
+      "type": "object"
+    },
+    "ThreadUpdate": {
+      "additionalProperties": false,
+      "properties": {
+        "archived": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Archived"
+        },
+        "project_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Project Id"
+        },
+        "title": {
+          "anyOf": [
+            {
+              "maxLength": 128,
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Title"
+        }
+      },
+      "title": "ThreadUpdate",
+      "type": "object"
+    },
+    "Transcription": {
+      "additionalProperties": false,
+      "properties": {
+        "media": {
+          "$ref": "#/$defs/MediaRecord"
+        },
+        "text": {
+          "maxLength": 32000,
+          "title": "Text",
+          "type": "string"
+        }
+      },
+      "required": [
+        "text",
+        "media"
+      ],
+      "title": "Transcription",
+      "type": "object"
+    },
+    "VisibleMessage": {
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "title": "Id",
+          "type": "string"
+        },
+        "origin": {
+          "enum": [
+            "telegram",
+            "web",
+            "automation"
+          ],
+          "title": "Origin",
+          "type": "string"
+        },
+        "parts": {
+          "items": {
+            "discriminator": {
+              "mapping": {
+                "file": "#/$defs/FilePart",
+                "text": "#/$defs/TextPart"
+              },
+              "propertyName": "type"
+            },
+            "oneOf": [
+              {
+                "$ref": "#/$defs/TextPart"
+              },
+              {
+                "$ref": "#/$defs/FilePart"
+              }
+            ]
+          },
+          "title": "Parts",
+          "type": "array"
+        },
+        "role": {
+          "enum": [
+            "user",
+            "assistant"
+          ],
+          "title": "Role",
+          "type": "string"
+        },
+        "run_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Run Id"
+        },
+        "sequence": {
+          "minimum": 1,
+          "title": "Sequence",
+          "type": "integer"
+        },
+        "thread_id": {
+          "title": "Thread Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "thread_id",
+        "sequence",
+        "role",
+        "origin",
+        "parts"
+      ],
+      "title": "VisibleMessage",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "description": "Schema-generation root, not an actual API response.",
+  "properties": {
+    "capabilities": {
+      "$ref": "#/$defs/Capabilities"
+    },
+    "connector_verification": {
+      "$ref": "#/$defs/ConnectorVerification"
+    },
+    "connector_write": {
+      "$ref": "#/$defs/ConnectorWrite"
+    },
+    "error": {
+      "$ref": "#/$defs/APIError"
+    },
+    "event": {
+      "$ref": "#/$defs/EventEnvelope"
+    },
+    "media": {
+      "$ref": "#/$defs/MediaRecord"
+    },
+    "media_list": {
+      "$ref": "#/$defs/MediaList"
+    },
+    "memory_write": {
+      "$ref": "#/$defs/MemoryWrite"
+    },
+    "message": {
+      "$ref": "#/$defs/VisibleMessage"
+    },
+    "message_page": {
+      "$ref": "#/$defs/MessagePage"
+    },
+    "preferences": {
+      "$ref": "#/$defs/PreferencesRecord"
+    },
+    "project": {
+      "$ref": "#/$defs/ProjectRecord"
+    },
+    "project_create": {
+      "$ref": "#/$defs/ProjectCreate"
+    },
+    "project_list": {
+      "$ref": "#/$defs/ProjectList"
+    },
+    "resources": {
+      "$ref": "#/$defs/ResourceSnapshot"
+    },
+    "run_details": {
+      "$ref": "#/$defs/RunDetails"
+    },
+    "send": {
+      "$ref": "#/$defs/SendRequest"
+    },
+    "send_receipt": {
+      "$ref": "#/$defs/SendReceipt"
+    },
+    "session": {
+      "$ref": "#/$defs/SessionRecord"
+    },
+    "skill_record": {
+      "$ref": "#/$defs/SkillRecord"
+    },
+    "skill_upload": {
+      "$ref": "#/$defs/SkillUpload"
+    },
+    "snapshot": {
+      "$ref": "#/$defs/Snapshot"
+    },
+    "stop_receipt": {
+      "$ref": "#/$defs/StopReceipt"
+    },
+    "thread": {
+      "$ref": "#/$defs/ThreadRecord"
+    },
+    "thread_create": {
+      "$ref": "#/$defs/ThreadCreate"
+    },
+    "thread_list": {
+      "$ref": "#/$defs/ThreadList"
+    },
+    "thread_update": {
+      "$ref": "#/$defs/ThreadUpdate"
+    },
+    "transcription": {
+      "$ref": "#/$defs/Transcription"
+    }
+  },
+  "required": [
+    "project",
+    "project_create",
+    "thread",
+    "thread_create",
+    "thread_update",
+    "message",
+    "send",
+    "send_receipt",
+    "stop_receipt",
+    "media",
+    "media_list",
+    "transcription",
+    "error",
+    "event",
+    "session",
+    "project_list",
+    "thread_list",
+    "message_page",
+    "snapshot",
+    "capabilities",
+    "preferences",
+    "run_details",
+    "resources",
+    "memory_write",
+    "connector_write",
+    "connector_verification",
+    "skill_upload",
+    "skill_record"
+  ],
+  "title": "WebContract",
+  "type": "object"
+}

@@ -102,6 +102,7 @@ class WebEventStore:
         for statement in SCHEMA.split(";"):
             if statement.strip():
                 await conn.execute(statement)
+        self.database.resource_changed = self.publish_resource
 
     async def publish(
         self,

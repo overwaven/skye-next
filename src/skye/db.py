@@ -4,13 +4,14 @@ import asyncio
 import json
 import re
 import time
-from collections.abc import AsyncIterator, Iterable, Mapping, Sequence
+from collections.abc import AsyncIterator, Awaitable, Callable, Iterable, Mapping, Sequence
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, cast
 
 import aiosqlite
+from cryptography.fernet import Fernet
 
 from .config import ModelId, Reasoning
 from .models import (
@@ -438,6 +439,12 @@ class Database:
         self.default_reasoning = default_reasoning
         self.connection: aiosqlite.Connection | None = None
         self._write_lock = asyncio.Lock()
+        self._connector_cipher: Fernet | None = None
+        self.resource_changed: Callable[[Scope, str, str], Awaitable[None]] | None = None
+
+    async def notify_resource(self, scope: Scope, resource: str, ident: str = "") -> None:
+        if self.resource_changed is not None:
+            await self.resource_changed(scope, resource, ident)
 
     async def open(self) -> None:
         self.path.parent.mkdir(parents=True, exist_ok=True)
@@ -448,6 +455,7 @@ class Database:
         await self.connection.execute("PRAGMA busy_timeout=5000")
         await self.connection.executescript(SCHEMA)
         await self._ensure_column("user_settings", "memory_enabled", "INTEGER NOT NULL DEFAULT 1")
+        await self._ensure_column("memories", "revision", "INTEGER NOT NULL DEFAULT 1")
         await self._ensure_column("chat_settings", "memory_enabled", "INTEGER NOT NULL DEFAULT 1")
         await self._ensure_column("user_settings", "active_agent_id", "TEXT")
         await self._ensure_column("chat_settings", "active_agent_id", "TEXT")
@@ -459,15 +467,41 @@ class Database:
         )
         await self._ensure_column("user_settings", "active_telegram_project_id", "TEXT")
         await self._ensure_column("automations", "once", "INTEGER NOT NULL DEFAULT 0")
-        await self._ensure_column(
-            "user_settings", "sparks_display", "INTEGER NOT NULL DEFAULT 1"
-        )
-        await self._ensure_column(
-            "chat_settings", "sparks_display", "INTEGER NOT NULL DEFAULT 1"
-        )
+        await self._ensure_column("user_settings", "sparks_display", "INTEGER NOT NULL DEFAULT 1")
+        await self._ensure_column("chat_settings", "sparks_display", "INTEGER NOT NULL DEFAULT 1")
         await self._normalize_group_message_threads()
         await self._migrate_composio_sessions()
         await self.connection.commit()
+
+    @property
+    def connector_credentials_configured(self) -> bool:
+        return self._connector_cipher is not None
+
+    async def configure_connector_encryption(self, key: str | None) -> None:
+        """Opt-in envelope migration. Back up DB and key together before enabling.
+
+        Old backups/WAL may retain plaintext; encryption does not replace disk encryption.
+        Wrong/missing keys fail closed on encrypted records, never drop credentials.
+        """
+        self._connector_cipher = Fernet(key.encode()) if key else None
+        async with self.transaction() as conn:
+            rows = await (await conn.execute("SELECT * FROM custom_connectors")).fetchall()
+            for row in rows:
+                connector = self._custom_connector(row)
+                if self._connector_cipher and not str(row["headers"]).startswith("fernet:"):
+                    await conn.execute(
+                        "UPDATE custom_connectors SET headers=? WHERE id=?",
+                        (self._encode_headers(connector), connector.id),
+                    )
+
+    def _encode_headers(self, connector: CustomConnector) -> str:
+        raw = json.dumps(connector.headers, separators=(",", ":"))
+        if self._connector_cipher is None:
+            return raw
+        payload = json.dumps(
+            {"owner": connector.user_id, "id": connector.id, "headers": connector.headers}
+        ).encode()
+        return "fernet:" + self._connector_cipher.encrypt(payload).decode()
 
     async def close(self) -> None:
         if self.connection is not None:
@@ -489,9 +523,7 @@ class Database:
     # -- Operator surfaces (observability, config overrides). These share the
     # process write lock so the ops worker can never commit a run's transaction.
 
-    async def execute_write(
-        self, sql: str, parameters: Sequence[object] = ()
-    ) -> aiosqlite.Cursor:
+    async def execute_write(self, sql: str, parameters: Sequence[object] = ()) -> aiosqlite.Cursor:
         return await self._write(sql, parameters)
 
     async def execute_many(self, sql: str, rows: Iterable[Any]) -> None:
@@ -504,23 +536,17 @@ class Database:
             await self.conn.executescript(script)
             await self.conn.commit()
 
-    async def fetch_all(
-        self, sql: str, parameters: Sequence[object] = ()
-    ) -> list[aiosqlite.Row]:
+    async def fetch_all(self, sql: str, parameters: Sequence[object] = ()) -> list[aiosqlite.Row]:
         cursor = await self.conn.execute(sql, parameters)
         return list(await cursor.fetchall())
 
-    async def fetch_one(
-        self, sql: str, parameters: Sequence[object] = ()
-    ) -> aiosqlite.Row | None:
+    async def fetch_one(self, sql: str, parameters: Sequence[object] = ()) -> aiosqlite.Row | None:
         cursor = await self.conn.execute(sql, parameters)
         return await cursor.fetchone()
 
     async def config_overrides(self) -> dict[str, Any]:
         """Stored settings overrides, keyed by environment variable."""
-        rows = await self.fetch_all(
-            "SELECT env, value FROM ops_config_overrides ORDER BY env"
-        )
+        rows = await self.fetch_all("SELECT env, value FROM ops_config_overrides ORDER BY env")
         result: dict[str, Any] = {}
         for row in rows:
             raw = str(row["value"])
@@ -546,9 +572,7 @@ class Database:
                 ],
             )
         for env in removals:
-            await self.execute_write(
-                "DELETE FROM ops_config_overrides WHERE env = ?", (env,)
-            )
+            await self.execute_write("DELETE FROM ops_config_overrides WHERE env = ?", (env,))
 
     async def _ensure_column(self, table: str, column: str, definition: str) -> None:
         cursor = await self.conn.execute(f"PRAGMA table_info({table})")
@@ -813,9 +837,7 @@ class Database:
     async def clear_chat_sponsor(self, chat_id: int) -> None:
         await self._write("DELETE FROM chat_sponsors WHERE chat_id = ?", (chat_id,))
 
-    async def usage_totals(
-        self, user_id: int, *, now: datetime | None = None
-    ) -> tuple[int, int]:
+    async def usage_totals(self, user_id: int, *, now: datetime | None = None) -> tuple[int, int]:
         day, month = _usage_keys(now)
         cursor = await self.conn.execute(
             """SELECT day_utc, month_utc, daily_tokens, monthly_tokens
@@ -843,9 +865,7 @@ class Database:
             )
             row = await cursor.fetchone()
             daily = (
-                int(row["daily_tokens"])
-                if row is not None and str(row["day_utc"]) == day
-                else 0
+                int(row["daily_tokens"]) if row is not None and str(row["day_utc"]) == day else 0
             )
             monthly = (
                 int(row["monthly_tokens"])
@@ -902,7 +922,6 @@ class Database:
         if row is None:
             return 0, 0, False
         return int(row["tasks"]), int(row["active_days"]), bool(row["rich_capability"])
-
 
     async def grant_activation_bonus(self, user_id: int, milli: int, now: int) -> bool:
         """Credit a one-time Sparks bonus once a user has genuinely activated."""
@@ -1021,6 +1040,7 @@ class Database:
             current.sparks_display,
         )
         await self._set_settings(scope, result)
+        await self.notify_resource(scope, "account")
         return result
 
     async def set_active_agent(self, scope: Scope, agent_id: str | None) -> ChatSettings:
@@ -1774,9 +1794,7 @@ class Database:
         row = await cursor.fetchone()
         return cast(str | None, row["media_group_id"]) if row else None
 
-    async def media_group_items(
-        self, chat_id: int, media_group_id: str
-    ) -> list[MediaGroupItem]:
+    async def media_group_items(self, chat_id: int, media_group_id: str) -> list[MediaGroupItem]:
         cursor = await self.conn.execute(
             """SELECT * FROM media_group_items
                WHERE chat_id = ? AND media_group_id = ?
@@ -1850,14 +1868,13 @@ class Database:
             sent_at=cast(int, row["sent_at"]),
         )
 
-    async def remember(
-        self, scope: Scope, content: str, category: MemoryCategory
-    ) -> Memory:
+    async def remember(self, scope: Scope, content: str, category: MemoryCategory) -> Memory:
         await self._write(
             """INSERT INTO memories (scope_kind, scope_id, category, content)
                VALUES (?, ?, ?, ?)
                ON CONFLICT(scope_kind, scope_id, content) DO UPDATE SET
-                   category = excluded.category,
+                    category = excluded.category,
+                    revision = memories.revision + 1,
                    updated_at = CURRENT_TIMESTAMP""",
             (scope.kind, scope.id, category, content),
         )
@@ -1869,6 +1886,7 @@ class Database:
         row = await cursor.fetchone()
         if row is None:
             raise RuntimeError("Memory was not saved")
+        await self.notify_resource(scope, "memory", str(row["id"]))
         return self._memory(row)
 
     async def memories(self, scope: Scope, limit: int = 20) -> list[Memory]:
@@ -1879,9 +1897,7 @@ class Database:
         )
         return [self._memory(row) for row in await cursor.fetchall()]
 
-    async def search_memories(
-        self, scope: Scope, query: str, limit: int = 8
-    ) -> list[Memory]:
+    async def search_memories(self, scope: Scope, query: str, limit: int = 8) -> list[Memory]:
         terms = re.findall(r"\w+", query.casefold(), flags=re.UNICODE)[:12]
         if not terms:
             return await self.memories(scope, limit)
@@ -1900,6 +1916,7 @@ class Database:
             "DELETE FROM memories WHERE id = ? AND scope_kind = ? AND scope_id = ?",
             (memory_id, scope.kind, scope.id),
         )
+        await self.notify_resource(scope, "memory", str(memory_id))
         return cursor.rowcount > 0
 
     async def clear_memories(self, scope: Scope) -> int:
@@ -1907,6 +1924,7 @@ class Database:
             "DELETE FROM memories WHERE scope_kind = ? AND scope_id = ?",
             (scope.kind, scope.id),
         )
+        await self.notify_resource(scope, "memory")
         return cursor.rowcount
 
     @staticmethod
@@ -1953,13 +1971,14 @@ class Database:
                 connector.user_id,
                 connector.name,
                 connector.url,
-                json.dumps(connector.headers, separators=(",", ":")),
+                self._encode_headers(connector),
                 int(connector.enabled),
             ),
         )
         saved = await self.get_custom_connector(connector.user_id, connector.id)
         if saved is None:
             raise LookupError("Connector not found.")
+        await self.notify_resource(Scope("user", connector.user_id), "connector", connector.id)
         return saved
 
     async def delete_custom_connector(self, user_id: int, connector_id: str) -> bool:
@@ -1967,6 +1986,7 @@ class Database:
             "DELETE FROM custom_connectors WHERE id = ? AND user_id = ?",
             (connector_id, user_id),
         )
+        await self.notify_resource(Scope("user", user_id), "connector", connector_id)
         return cursor.rowcount > 0
 
     async def list_skills(self, scope: Scope) -> list[Skill]:
@@ -2009,6 +2029,7 @@ class Database:
         saved = await self.get_skill(skill.scope, skill.id)
         if saved is None:
             raise LookupError("Skill not found.")
+        await self.notify_resource(skill.scope, "skill", skill.id)
         return saved
 
     async def delete_skill(self, scope: Scope, skill_id: str) -> Skill | None:
@@ -2019,6 +2040,7 @@ class Database:
             "DELETE FROM skills WHERE id = ? AND scope_kind = ? AND scope_id = ?",
             (skill_id, scope.kind, scope.id),
         )
+        await self.notify_resource(scope, "skill", skill_id)
         return current
 
     @staticmethod
@@ -2302,9 +2324,17 @@ class Database:
             created_at=cast(str, row["created_at"]),
         )
 
-    @staticmethod
-    def _custom_connector(row: aiosqlite.Row) -> CustomConnector:
-        raw = json.loads(cast(str, row["headers"]) or "{}")
+    def _custom_connector(self, row: aiosqlite.Row) -> CustomConnector:
+        encoded = cast(str, row["headers"]) or "{}"
+        if encoded.startswith("fernet:"):
+            if self._connector_cipher is None:
+                raise ValueError("Connector encryption key is required")
+            payload = json.loads(self._connector_cipher.decrypt(encoded[7:].encode()))
+            if payload["owner"] != row["user_id"] or payload["id"] != row["id"]:
+                raise ValueError("Connector credential owner mismatch")
+            raw = payload["headers"]
+        else:
+            raw = json.loads(encoded)
         headers = {
             str(key): str(value)
             for key, value in raw.items()
