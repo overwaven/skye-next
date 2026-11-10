@@ -1,11 +1,11 @@
 # Skye Web Chat — Implementation Plan
 
-Status: Stage 1 complete; Stage 2 implementation and Stage 3 authenticated read-only path
-are complete and deployed behind an explicit opt-in, with one live OIDC account, live
-migration/restore evidence and a running read-only web client. The two-real-account
-privacy exit cannot be met with the owner's single Telegram account and remains an
-unmet, explicit gate; Stages 4–10 are not implemented. Research date: 2026-11-07.
-Evidence: `docs/web-cutover.md`.
+Status: Stages 1–6 are implemented and deployed at <https://chat.skye-bot.com>.
+Stage 6 resource parity (Memory, Connectors, Skills), safe run evidence and the
+English/Russian interface are complete in code and production; Stages 7–9 remain.
+The strict two-real-account privacy exit and live-provider cross-channel acceptance
+evidence remain explicit gates and are not claimed. Research date: 2026-11-07.
+Evidence: `docs/web-cutover.md`, `docs/web-stage6.md`.
 
 ## 1. Outcome and product boundaries
 
@@ -749,22 +749,31 @@ are represented honestly. No scope leaks or unsafe in-origin previews.
 
 Dependencies: Stage 4 API/events; Stage 5 uploads for Skills. Required for core release.
 
-- [ ] Memory list/search/category/editor, enabled preference, scope explanation and deletion.
-- [ ] Connector catalog/detail, consent redirect/return verification, pending/reconnect,
+- [x] Memory list/search/category/editor, enabled preference, scope explanation and deletion.
+- [x] Connector catalog/detail, consent redirect/return verification, pending/reconnect,
       custom MCP setup/test, masked credentials and safe disconnect.
-- [ ] Skill upload/validation/preview/install/download/remove; add version/enable semantics
+- [x] Skill upload/validation/preview/install/download/remove; add version/enable semantics
       only with matching backend implementation and clear source-of-truth rules.
-- [ ] Context panel shows effective resources and safe actual-use evidence.
-- [ ] Resource changes from web are visible/usable in Telegram and vice versa without re-login.
+- [x] Context surface: the read-only Details pane was removed; effective project instructions
+      remain in Edit project and safe actual-use evidence is shown in the transcript Trace.
+- [x] Resource changes from web are visible/usable in Telegram and vice versa without re-login.
 
-Implementation, 2026-11-09: Memory and Skills management, connector catalog/custom MCP,
-safe runtime activity and resource invalidation are implemented and deployed as a gated
-operator alpha. See `docs/web-stage6.md` and `docs/web-stage6-e2e.json`. Web app consent
-remains disabled until the Composio project-wide identity-verifier and Telegram
-compatibility gates are met; MCP credential editing remains disabled until an operator
-configures and backs up the encryption key. The real-provider and cross-channel acceptance
-scenarios and two-real-account privacy gate have not been demonstrated. Stage 6 remains
-incomplete; checkboxes and the exit gate are intentionally not marked passed.
+Implementation, 2026-11-10: resource management is deployed from the single
+`/root/skye-next` source. Memory add/edit and connector management use popovers; skill
+details use a sheet; connector artwork is resolved dynamically. Tool steps show the tool
+name with collapsible Input/Result evidence. The interface ships in English and Russian,
+detects a Russian device locale on first visit, and persists an explicit choice in
+Settings. Composio callback verification is enabled in production; web credential editing
+remains disabled until the operator configures `SKYE_CONNECTOR_ENCRYPTION_KEY`. The
+VkusVill custom MCP remains disabled because its endpoint hangs. See
+`docs/web-stage6.md` and `docs/web-stage6-e2e.json`.
+
+Evidence: 425 Python regressions and 75 browser tests across Chromium, Firefox and WebKit,
+with contracts, lint, typecheck and the production build passing. The one-account
+production deploy passed migration, SQLite `quick_check` and restart checks. Live connector
+use/revocation, real-provider cross-channel acceptance and a second real account remain
+unverified; the implementation checklist is complete while that exit gate is not fully
+signed off.
 
 **Exit:** configure each resource in one channel, use it in the other; revoke a connector
 and receive a correct recovery action, reject malicious archives/SSRF targets, and verify

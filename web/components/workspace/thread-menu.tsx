@@ -46,6 +46,7 @@ import {
 import { Field, FieldGroup, FieldLabel } from "@/components/ui/field"
 import { Input } from "@/components/ui/input"
 import type { ThreadRecord } from "@/lib/contracts.generated"
+import { useI18n } from "@/components/i18n-provider"
 
 type ListThread = {
   id: string
@@ -70,6 +71,7 @@ export function ThreadMenu({
 }) {
   const router = useRouter()
   const pathname = usePathname()
+  const { t } = useI18n()
   const [rename, setRename] = React.useState(false)
   const [remove, setRemove] = React.useState(false)
   const [title, setTitle] = React.useState(thread.title)
@@ -92,7 +94,7 @@ export function ThreadMenu({
     )
     setBusy(false)
     if (!response.ok) {
-      setError("That change could not be saved.")
+      setError(t("thread.changeFailed"))
       return null
     }
     const updated = (await response.json()) as ThreadRecord
@@ -110,7 +112,7 @@ export function ThreadMenu({
     )
     setBusy(false)
     if (!response.ok) {
-      setError("That thread could not be deleted.")
+      setError(t("thread.deleteFailed"))
       return
     }
     setRemove(false)
@@ -127,7 +129,7 @@ export function ThreadMenu({
             <Button
               variant="ghost"
               size="icon-sm"
-              aria-label="Thread actions"
+              aria-label={t("thread.actions")}
               className="row-overflow"
             />
           }
@@ -144,7 +146,7 @@ export function ThreadMenu({
               }}
             >
               <HugeiconsIcon icon={Edit02Icon} />
-              Rename
+              {t("thread.rename")}
             </DropdownMenuItem>
             <DropdownMenuItem
               onClick={() => {
@@ -154,12 +156,12 @@ export function ThreadMenu({
               <HugeiconsIcon
                 icon={thread.pinned ? PinOffIcon : PinIcon}
               />
-              {thread.pinned ? "Unpin" : "Pin"}
+              {thread.pinned ? t("thread.unpin") : t("thread.pin")}
             </DropdownMenuItem>
             <DropdownMenuSub>
               <DropdownMenuSubTrigger>
                 <HugeiconsIcon icon={Folder01Icon} />
-                Move
+                {t("thread.move")}
               </DropdownMenuSubTrigger>
               <DropdownMenuSubContent>
                 <DropdownMenuItem
@@ -169,7 +171,7 @@ export function ThreadMenu({
                   }}
                 >
                   <span className="w-4 text-center">–</span>
-                  No project
+                  {t("thread.noProject")}
                   {thread.project_id === null && (
                     <HugeiconsIcon icon={Tick02Icon} className="ms-auto" />
                   )}
@@ -199,7 +201,9 @@ export function ThreadMenu({
               <HugeiconsIcon
                 icon={thread.archived ? ArchiveRestoreIcon : Archive01Icon}
               />
-              {thread.archived ? "Unarchive" : "Archive"}
+              {thread.archived
+                ? t("thread.unarchive")
+                : t("thread.archive")}
             </DropdownMenuItem>
           </DropdownMenuGroup>
           <DropdownMenuSeparator />
@@ -212,7 +216,7 @@ export function ThreadMenu({
               }}
             >
               <HugeiconsIcon icon={Delete02Icon} />
-              Delete
+              {t("thread.delete")}
             </DropdownMenuItem>
           </DropdownMenuGroup>
         </DropdownMenuContent>
@@ -220,12 +224,12 @@ export function ThreadMenu({
       <Dialog open={rename} onOpenChange={setRename}>
         <DialogContent>
           <DialogHeader>
-            <DialogTitle>Rename</DialogTitle>
+            <DialogTitle>{t("thread.rename")}</DialogTitle>
           </DialogHeader>
           <FieldGroup>
             <Field>
               <FieldLabel htmlFor={`thread-title-${thread.id}`}>
-                Title
+                {t("thread.title")}
               </FieldLabel>
               <Input
                 id={`thread-title-${thread.id}`}
@@ -238,7 +242,7 @@ export function ThreadMenu({
           {error && <p className="text-sm text-destructive">{error}</p>}
           <DialogFooter>
             <Button variant="outline" onClick={() => setRename(false)}>
-              Cancel
+              {t("common.cancel")}
             </Button>
             <Button
               disabled={busy || !title.trim()}
@@ -248,7 +252,7 @@ export function ThreadMenu({
                 })
               }}
             >
-              Save
+              {t("thread.save")}
             </Button>
           </DialogFooter>
         </DialogContent>
@@ -256,15 +260,14 @@ export function ThreadMenu({
       <AlertDialog open={remove} onOpenChange={setRemove}>
         <AlertDialogContent>
           <AlertDialogHeader>
-            <AlertDialogTitle>Delete this thread?</AlertDialogTitle>
+            <AlertDialogTitle>{t("thread.deleteTitle")}</AlertDialogTitle>
             <AlertDialogDescription>
-              Its messages, runs and activity will be removed. This cannot be
-              undone.
+              {t("thread.deleteDescription")}
             </AlertDialogDescription>
           </AlertDialogHeader>
           {error && <p className="text-sm text-destructive">{error}</p>}
           <AlertDialogFooter>
-            <AlertDialogCancel disabled={busy}>Cancel</AlertDialogCancel>
+            <AlertDialogCancel disabled={busy}>{t("common.cancel")}</AlertDialogCancel>
             <AlertDialogAction
               disabled={busy}
               onClick={(event) => {
@@ -272,7 +275,7 @@ export function ThreadMenu({
                 void removeThread()
               }}
             >
-              Delete
+              {t("common.delete")}
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>

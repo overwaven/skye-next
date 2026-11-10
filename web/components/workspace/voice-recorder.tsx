@@ -6,14 +6,18 @@ import { Mic01Icon, StopIcon } from "@hugeicons/core-free-icons"
 import { InputGroupButton } from "@/components/ui/input-group"
 import { Spinner } from "@/components/ui/spinner"
 import { toast } from "@/components/ui/toast"
+import { useI18n } from "@/components/i18n-provider"
+import type { MessageKey, MessageValues } from "@/lib/i18n"
 
 function clock(seconds: number) {
   return `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, "0")}`
 }
 
-function recordingError(description: string) {
+type Translate = (key: MessageKey, values?: MessageValues) => string
+
+function recordingError(t: Translate, description: string) {
   toast.add({
-    title: "Recording failed",
+    title: t("chat.recordingFailed"),
     description,
     type: "error",
     timeout: 6000,
@@ -29,6 +33,7 @@ export function VoiceRecorder({
   disabled?: boolean
   onReady: (text: string) => void
 }) {
+  const { t } = useI18n()
   const [recording, setRecording] = React.useState(false)
   const [seconds, setSeconds] = React.useState(0)
   const [busy, setBusy] = React.useState(false)
@@ -58,7 +63,7 @@ export function VoiceRecorder({
 
   async function start() {
     if (!navigator.mediaDevices?.getUserMedia || !window.MediaRecorder) {
-      recordingError("Recording is not supported in this browser.")
+      recordingError(t, t("chat.recordingUnsupported"))
       return
     }
     try {
@@ -96,7 +101,7 @@ export function VoiceRecorder({
       }, 1000)
     } catch {
       cleanup()
-      recordingError("Microphone access is blocked. Allow it or type instead.")
+      recordingError(t, t("chat.microphoneBlocked"))
     }
   }
 
@@ -116,9 +121,10 @@ export function VoiceRecorder({
       })
       if (!response.ok) {
         recordingError(
+          t,
           response.status === 429
-            ? "Too many recordings. Wait a minute and try again."
-            : "That recording could not be transcribed. Try again."
+            ? t("chat.recordingTooMany")
+            : t("chat.recordingFailedBody")
         )
         return
       }
@@ -136,8 +142,8 @@ export function VoiceRecorder({
       const text = data.text.trim()
       if (!text) {
         toast.add({
-          title: "Nothing recorded",
-          description: "Skye could not hear any speech. Try again.",
+          title: t("chat.nothingRecorded"),
+          description: t("chat.nothingRecordedBody"),
           type: "info",
         })
         return
@@ -145,7 +151,7 @@ export function VoiceRecorder({
       onReady(text)
     } catch {
       if (!unmounted.current)
-        recordingError("The recording could not be uploaded. Try again.")
+        recordingError(t, t("chat.recordingUploadFailed"))
     } finally {
       if (!unmounted.current) setBusy(false)
     }
@@ -155,7 +161,7 @@ export function VoiceRecorder({
     <InputGroupButton
       size="sm"
       variant="destructive"
-      aria-label="Stop recording"
+      aria-label={t("chat.stopRecording")}
       onClick={() => recorder.current?.stop()}
     >
       <HugeiconsIcon icon={StopIcon} data-icon="inline-start" />
@@ -164,7 +170,7 @@ export function VoiceRecorder({
   ) : (
     <InputGroupButton
       size="icon-sm"
-      aria-label="Record a voice message"
+      aria-label={t("chat.recordVoice")}
       disabled={disabled || busy}
       onClick={() => void start()}
     >

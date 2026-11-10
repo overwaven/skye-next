@@ -16,6 +16,7 @@ import {
 } from "@/components/ui/dialog"
 import { Button } from "@/components/ui/button"
 import { useState } from "react"
+import { useI18n } from "@/components/i18n-provider"
 
 export function MediaPreview({
   open,
@@ -30,6 +31,7 @@ export function MediaPreview({
   mediaType: string
   src?: string
 }) {
+  const { t } = useI18n()
   const [failed, setFailed] = useState(false)
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -48,10 +50,10 @@ export function MediaPreview({
                 variant="ghost"
                 nativeButton={false}
                 render={<a href={src} download={name} />}
-                aria-label={`Download ${name}`}
+                aria-label={`${t("media.download")} ${name}`}
               >
                 <HugeiconsIcon icon={Download01Icon} data-icon="inline-start" />
-                <span className="hidden sm:inline">Download</span>
+                <span className="hidden sm:inline">{t("media.download")}</span>
               </Button>
             )}
             <DialogClose
@@ -59,7 +61,7 @@ export function MediaPreview({
                 <Button
                   variant="ghost"
                   size="icon"
-                  aria-label="Close preview"
+                  aria-label={t("media.closePreview")}
                 />
               }
             >
@@ -81,8 +83,8 @@ export function MediaPreview({
                 <HugeiconsIcon icon={File01Icon} />
                 <p>
                   {failed || !src
-                    ? "This file is no longer available."
-                    : "No in-app preview for this file."}
+                    ? t("media.noLongerAvailable")
+                    : t("media.noPreview")}
                 </p>
               </div>
             )}

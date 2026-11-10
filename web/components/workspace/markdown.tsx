@@ -11,9 +11,11 @@ import {
   CodeBlockHeader,
   CodeBlockTitle,
 } from "@/components/ui/code-block"
+import { useI18n } from "@/components/i18n-provider"
 
 /** Safe Markdown: raw HTML is never rendered and images never load remotely. */
 export function Markdown({ text }: { text: string }) {
+  const { t } = useI18n()
   return (
     <div className="message-text">
       <ReactMarkdown
@@ -41,7 +43,7 @@ export function Markdown({ text }: { text: string }) {
             return (
               <CodeBlock>
                 <CodeBlockHeader>
-                  <CodeBlockTitle>{language ?? "Code"}</CodeBlockTitle>
+                  <CodeBlockTitle>{language ?? t("common.code")}</CodeBlockTitle>
                   <CodeBlockActions>
                     <CodeBlockCopyButton value={value} />
                   </CodeBlockActions>

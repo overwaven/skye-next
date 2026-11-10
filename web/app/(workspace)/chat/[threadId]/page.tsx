@@ -6,19 +6,21 @@ import {
   getSession,
   getThreadState,
 } from "@/lib/api"
+import { getTranslator } from "@/lib/i18n-server"
 
 type Props = { params: Promise<{ threadId: string }> }
 
 export async function generateMetadata({ params }: Props) {
-  if (accountEnabled()) return { title: "Thread" }
+  const { t } = await getTranslator()
+  if (accountEnabled()) return { title: t("meta.thread") }
   if (process.env.NODE_ENV !== "development")
-    return { title: "Thread unavailable" }
+    return { title: t("error.threadUnavailable") }
   const { threadId } = await params
   const { navigation } = await import("@/lib/preview-data")
   return {
     title:
       navigation.threads.find((thread) => thread.id === threadId)?.title ||
-      "Preview thread",
+      t("chat.previewThread"),
   }
 }
 

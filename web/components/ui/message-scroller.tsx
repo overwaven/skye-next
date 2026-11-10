@@ -12,6 +12,7 @@ import { cn } from "cn"
 import { Button } from "@/components/ui/button"
 import { HugeiconsIcon } from "@hugeicons/react"
 import { ArrowDown02Icon } from "@hugeicons/core-free-icons"
+import { useI18n } from "@/components/i18n-provider"
 
 function MessageScrollerProvider(
   props: React.ComponentProps<typeof MessageScrollerPrimitive.Provider>
@@ -92,6 +93,7 @@ function MessageScrollerButton({
   ...props
 }: React.ComponentProps<typeof MessageScrollerPrimitive.Button> &
   Pick<React.ComponentProps<typeof Button>, "variant" | "size">) {
+  const { t } = useI18n()
   return (
     <MessageScrollerPrimitive.Button
       data-slot="message-scroller-button"
@@ -110,7 +112,7 @@ function MessageScrollerButton({
         <>
           <HugeiconsIcon icon={ArrowDown02Icon} strokeWidth={2} />
           <span className="sr-only">
-            {direction === "end" ? "Scroll to end" : "Scroll to start"}
+            {direction === "end" ? t("ui.scrollEnd") : t("ui.scrollStart")}
           </span>
         </>
       )}

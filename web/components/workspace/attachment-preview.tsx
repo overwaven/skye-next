@@ -20,6 +20,7 @@ import {
   AttachmentTrigger,
 } from "@/components/ui/attachment"
 import { MediaPreview } from "@/components/workspace/media-preview"
+import { useI18n } from "@/components/i18n-provider"
 
 function sizeLabel(size?: number) {
   if (size === undefined) return ""
@@ -43,6 +44,7 @@ export function PreviewableAttachment({
   availability: "available" | "expired" | "unresolved"
   onRemove?: () => void
 }) {
+  const { t } = useI18n()
   const [open, setOpen] = React.useState(false)
   const [broken, setBroken] = React.useState(false)
   const available = availability === "available" && Boolean(src) && !broken
@@ -60,7 +62,7 @@ export function PreviewableAttachment({
       >
         {available && (
           <AttachmentTrigger
-            aria-label={`Preview ${name}`}
+            aria-label={t("media.previewFile", { name })}
             onClick={() => setOpen(true)}
           />
         )}
@@ -82,22 +84,22 @@ export function PreviewableAttachment({
           <AttachmentTitle>{name}</AttachmentTitle>
           <AttachmentDescription>
             {broken
-              ? "No longer available"
+              ? t("media.noLongerAvailable")
               : availability === "expired"
-                ? "Expired"
+                ? t("media.expired")
                 : availability === "unresolved"
-                  ? "Not available here"
+                  ? t("media.notAvailableHere")
                   : [mediaType, sizeLabel(size)].filter(Boolean).join(" · ")}
           </AttachmentDescription>
         </AttachmentContent>
         <AttachmentActions>
           {onRemove ? (
-            <AttachmentAction aria-label={`Remove ${name}`} onClick={onRemove}>
+            <AttachmentAction aria-label={t("media.removeFile", { name })} onClick={onRemove}>
               <HugeiconsIcon icon={Cancel01Icon} />
             </AttachmentAction>
           ) : (
             <AttachmentAction
-              aria-label={`Preview ${name}`}
+              aria-label={t("media.previewFile", { name })}
               disabled={!available}
               onClick={() => setOpen(true)}
             >

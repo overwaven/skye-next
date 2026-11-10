@@ -1,10 +1,16 @@
 export const librarySections = {
-  memory: { name: "Memory", action: "Add memory" },
-  connectors: { name: "Connectors", action: "Connect an app" },
-  skills: { name: "Skills", action: "Upload a skill" },
-  files: { name: "Files", action: "Upload a file" },
-  agents: { name: "Agents", action: "Create an agent" },
-  automations: { name: "Automations", action: "Create an automation" },
+  memory: { nameKey: "library.memory", actionKey: "library.actionMemory" },
+  connectors: {
+    nameKey: "library.connectors",
+    actionKey: "library.actionConnectors",
+  },
+  skills: { nameKey: "library.skills", actionKey: "library.actionSkills" },
+  files: { nameKey: "library.files", actionKey: "library.actionFiles" },
+  agents: { nameKey: "library.agents", actionKey: "library.actionAgents" },
+  automations: {
+    nameKey: "library.automations",
+    actionKey: "library.actionAutomations",
+  },
 } as const
 
 export type LibrarySection = keyof typeof librarySections

@@ -936,6 +936,10 @@
   flex-shrink: 0;
 }
 @media (max-width: 767px) {
+  .detail-page [data-slot="tabs-list"] { justify-content: flex-start; }
+  .detail-page [data-slot="tabs-trigger"] { padding-inline: 4px; }
+}
+@media (max-width: 767px) {
   .media-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }

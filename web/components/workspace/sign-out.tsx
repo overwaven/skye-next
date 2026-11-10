@@ -5,6 +5,7 @@ import { HugeiconsIcon } from "@hugeicons/react"
 import { Logout01Icon } from "@hugeicons/core-free-icons"
 import { Button } from "@/components/ui/button"
 import { Spinner } from "@/components/ui/spinner"
+import { useI18n } from "@/components/i18n-provider"
 
 export function SignOutButton({
   allDevices = false,
@@ -12,6 +13,7 @@ export function SignOutButton({
   allDevices?: boolean
 }) {
   const { pending } = useFormStatus()
+  const { t } = useI18n()
   return (
     <Button type="submit" variant="ghost" disabled={pending}>
       {pending ? (
@@ -20,10 +22,10 @@ export function SignOutButton({
         <HugeiconsIcon icon={Logout01Icon} data-icon="inline-start" />
       )}
       {pending
-        ? "Signing out…"
+        ? t("signout.pending")
         : allDevices
-          ? "Sign out all devices"
-          : "Sign out"}
+          ? t("signout.all")
+          : t("signout.one")}
     </Button>
   )
 }

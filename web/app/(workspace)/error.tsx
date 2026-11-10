@@ -3,20 +3,21 @@
 import Link from "next/link"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import { Button, buttonVariants } from "@/components/ui/button"
+import { useI18n } from "@/components/i18n-provider"
 
 export default function AccountError({ reset }: { reset: () => void }) {
+  const { t } = useI18n()
   return (
     <main className="detail-content">
       <Alert>
-        <AlertTitle>Account view unavailable</AlertTitle>
+        <AlertTitle>{t("error.accountTitle")}</AlertTitle>
         <AlertDescription>
-          Skye could not load this view. Try loading it again, or sign in with
-          Telegram.
+          {t("error.accountDescription")}
         </AlertDescription>
       </Alert>
-      <Button onClick={reset}>Try again</Button>
+      <Button onClick={reset}>{t("error.tryAgain")}</Button>
       <Link href="/login" className={buttonVariants({ variant: "outline" })}>
-        Sign in
+        {t("error.signIn")}
       </Link>
     </main>
   )

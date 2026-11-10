@@ -7,6 +7,7 @@ import { useTheme } from "next-themes"
 import { HugeiconsIcon } from "@hugeicons/react"
 import {
   ComputerIcon,
+  LanguagesIcon,
   Moon02Icon,
   Sun03Icon,
   Tick02Icon,
@@ -16,12 +17,23 @@ import { buttonVariants } from "@/components/ui/button"
 import { settingsSections } from "@/lib/foundation"
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs"
 import { useRouter } from "next/navigation"
+import { useI18n } from "@/components/i18n-provider"
+import type { Locale } from "@/lib/i18n"
 
 const themeOptions = [
-  { value: "system", label: "System", icon: ComputerIcon },
-  { value: "light", label: "Light", icon: Sun03Icon },
-  { value: "dark", label: "Dark", icon: Moon02Icon },
+  { value: "system", labelKey: "nav.themeSystem", icon: ComputerIcon },
+  { value: "light", labelKey: "nav.themeLight", icon: Sun03Icon },
+  { value: "dark", labelKey: "nav.themeDark", icon: Moon02Icon },
 ] as const
+
+const languageOptions: {
+  value: Locale
+  labelKey: "common.english" | "common.russian"
+  icon: typeof LanguagesIcon
+}[] = [
+  { value: "en", labelKey: "common.english", icon: LanguagesIcon },
+  { value: "ru", labelKey: "common.russian", icon: LanguagesIcon },
+]
 
 export function SettingsView({
   section,
@@ -32,65 +44,92 @@ export function SettingsView({
 }) {
   const { theme, setTheme } = useTheme()
   const router = useRouter()
+  const { t, locale, setLocale } = useI18n()
   const activeTheme = theme ?? "system"
   const title = {
-    general: "General",
-    account: "Account",
-    privacy: "Privacy",
-    sessions: "Sessions",
+    general: t("settings.general"),
+    account: t("settings.account"),
+    privacy: t("settings.privacy"),
+    sessions: t("settings.sessions"),
   }[section]
   return (
     <div className="detail-page">
       <PageHeader
         title={title}
-        parent={{ name: "Settings", href: "/settings/general" }}
+        parent={{ name: t("settings.title"), href: "/settings/general" }}
       />
       <main className="detail-content">
         <Tabs
           value={section}
           onValueChange={(value) => router.push(`/settings/${value}`)}
         >
-          <TabsList aria-label="Settings sections" className="mb-8">
+          <TabsList aria-label={t("settings.sections")} className="mb-8 justify-start">
             {settingsSections.map((name) => (
               <TabsTrigger key={name} value={name}>
-                {name.charAt(0).toUpperCase() + name.slice(1)}
+                {t(`settings.${name}`)}
               </TabsTrigger>
             ))}
           </TabsList>
           <TabsContent value={section}>
             {section === "general" ? (
-              <fieldset className="theme-fieldset">
-                <legend>Appearance</legend>
-                <div className="theme-options">
-                  {themeOptions.map((option) => (
-                    <label key={option.value} className="theme-option">
-                      <input
-                        type="radio"
-                        name="appearance"
-                        value={option.value}
-                        checked={activeTheme === option.value}
-                        onChange={() => setTheme(option.value)}
-                        className="sr-only"
-                      />
-                      <HugeiconsIcon icon={option.icon} />
-                      <span>{option.label}</span>
-                      <HugeiconsIcon
-                        icon={Tick02Icon}
-                        className="theme-option-check"
-                        aria-hidden="true"
-                      />
-                    </label>
-                  ))}
-                </div>
-              </fieldset>
+              <div className="flex flex-col gap-8">
+                <fieldset className="theme-fieldset">
+                  <legend>{t("settings.appearance")}</legend>
+                  <div className="theme-options">
+                    {themeOptions.map((option) => (
+                      <label key={option.value} className="theme-option">
+                        <input
+                          type="radio"
+                          name="appearance"
+                          value={option.value}
+                          checked={activeTheme === option.value}
+                          onChange={() => setTheme(option.value)}
+                          className="sr-only"
+                        />
+                        <HugeiconsIcon icon={option.icon} />
+                        <span>{t(option.labelKey)}</span>
+                        <HugeiconsIcon
+                          icon={Tick02Icon}
+                          className="theme-option-check"
+                          aria-hidden="true"
+                        />
+                      </label>
+                    ))}
+                  </div>
+                </fieldset>
+                <fieldset className="theme-fieldset">
+                  <legend>{t("settings.language")}</legend>
+                  <div className="theme-options">
+                    {languageOptions.map((option) => (
+                      <label key={option.value} className="theme-option">
+                        <input
+                          type="radio"
+                          name="language"
+                          value={option.value}
+                          checked={locale === option.value}
+                          onChange={() => setLocale(option.value)}
+                          className="sr-only"
+                        />
+                        <HugeiconsIcon icon={option.icon} />
+                        <span>{t(option.labelKey)}</span>
+                        <HugeiconsIcon
+                          icon={Tick02Icon}
+                          className="theme-option-check"
+                          aria-hidden="true"
+                        />
+                      </label>
+                    ))}
+                  </div>
+                </fieldset>
+              </div>
             ) : (
               <div className="settings-row">
                 <p>
                   {section === "account"
-                    ? "Balances are not available here."
+                    ? t("settings.balancesUnavailable")
                     : section === "privacy"
-                      ? "History is kept until you clear it. Logs contain metadata only."
-                      : "Sessions expire after 7 idle days or 30 days total."}
+                      ? t("settings.history")
+                      : t("settings.sessionsExpire")}
                 </p>
                 {accountConnected && section === "sessions" ? (
                   <form action={signOutAllDevices}>
@@ -101,7 +140,7 @@ export function SettingsView({
                     href="/login"
                     className={buttonVariants({ variant: "outline" })}
                   >
-                    Sign in
+                    {t("settings.signIn")}
                   </Link>
                 ) : null}
               </div>

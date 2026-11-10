@@ -56,8 +56,10 @@ that operator gate is complete, connecting/reconnecting an app from web remains 
 existing connected apps and safe disconnect still work.
 
 Automated local API evidence is in `docs/web-stage6-e2e.json`. Connected browser tests
-use a local synthetic database, not real credentials. The real-provider, two-real-account
-and cross-channel acceptance gates remain unverified; Stage 6 is not yet complete.
+use a local synthetic database, not real credentials. The one-account production deploy
+and the Memory/Connectors/Skills browser flows are verified. Live real-provider connector
+use/revocation, cross-channel acceptance and a second real account remain unverified; the
+implementation checklist is complete while that exit gate is not fully signed off.
 
 ## Local visual review
 
@@ -71,27 +73,25 @@ categories now show their readable label and MCP setup does not stretch to page 
 The one screen question for each resource is answered by its list; scope is explicit;
 neither connector availability nor a saved memory is represented as evidence of use.
 
-## Deployment, 2026-11-09
+## Deployment, 2026-11-10
 
-Built and deployed from the isolated `/root/skye-stage6-yxYghs2B` snapshot without
-overwriting `/root/skye-next` or its nested web checkout. The Python and web containers
-are running, Telegram polling and the web listener started, the public login returns 200,
-and anonymous resource access returns 401. Pre-deployment SQLite online backups and media
-archives are in the private directory `/root/skye-stage6-backup-9BUlhqRv`; SQLite integrity
-was checked. Rebuilt pre-stage images are retained as `skye-next:pre-stage6-20261109` and
-`skye-web:pre-stage6-20261109`. They are rollback candidates, not a license to restore an
-older database after new writes. The separate snapshot is the active Compose build context;
-future deployments must incorporate these changes before returning to the original checkout.
-The final backend image additionally rejects a server URL change that would silently
-forward saved credentials. Post-deployment SQLite `quick_check` passed, and both
-containers reported running without restarts.
+The isolated Stage 6 snapshot was folded back into the single source checkout at
+`/root/skye-next`; no second copy of the application remains on the server. The Python
+and web containers run from that checkout, Telegram polling and the web listener start,
+the public login returns 200, and resource access remains owner-scoped. The production
+schema includes thread pins/previews and persisted tool activity details.
 
-The running deployment has no connector encryption key or verifier opt-in; thus web
-credential editing and Composio consent/reconnect remain unavailable as described above.
-Authenticated live UI, actual connector use/revocation and a second real account were not
-verified. `npm ci` reported 13 dependency audit findings (2 low, 11 moderate).
+Composio callback verification is enabled with the project-wide verifier at
+`https://chat.skye-bot.com/connector-verify`. Web credential editing remains disabled until
+`SKYE_CONNECTOR_ENCRYPTION_KEY` is configured and backed up as described above. The
+VkusVill custom MCP remains disabled because `https://mcp.vkusvill.ru/mcp` hangs.
 
-Local verification: 422 Python regressions, 48 fixture-browser checks (six connected-only
-checks skipped there), and six connected gallery/resource browser checks across Chromium,
-Firefox and WebKit. The latter use an isolated local database and save screenshots under
-`web/test-results/`; they are not live-account verification.
+Post-deployment SQLite `quick_check` passed and both containers reported running without
+restarts. Anonymous resource access returns 401; authenticated live UI was verified with
+the owner's account.
+
+Local verification: 425 Python regressions and 75 browser checks across Chromium, Firefox
+and WebKit, including chat selection/layout stability, tool evidence, Memory/Skills/
+Connectors CRUD, project deletion and English/Russian locale persistence. The connected
+browser checks use an isolated local database under `web/test-results/`; they are not live
+provider or second-account verification.

@@ -6,9 +6,11 @@ import { PageHeader } from "@/components/workspace/page-header"
 import { Button } from "@/components/ui/button"
 import { Alert, AlertDescription } from "@/components/ui/alert"
 import { resourceRequest } from "@/components/workspace/resources/resource-api"
+import { useI18n } from "@/components/i18n-provider"
 
 export function ConnectorVerification({ csrf }: { csrf: string }) {
-  const [status, setStatus] = useState("Verifying your connection…")
+  const { t } = useI18n()
+  const [status, setStatus] = useState(t("verify.verifying"))
   const [error, setError] = useState(false)
   const started = useRef(false)
   useEffect(() => {
@@ -21,23 +23,21 @@ export function ConnectorVerification({ csrf }: { csrf: string }) {
       csrf,
       "POST",
       { session_uri: token }
-    ) : Promise.reject(new Error("Missing authorization"))
+    ) : Promise.reject(new Error(t("verify.missing")))
     void verification
       .then(() =>
-        setStatus("Connection verified. You can return to Connectors.")
+        setStatus(t("verify.verified"))
       )
       .catch(() => {
         setError(true)
-        setStatus(
-          "Could not verify this connection. Return to Connectors and start again."
-        )
+        setStatus(t("verify.failed"))
       })
-  }, [csrf])
+  }, [csrf, t])
   return (
     <div className="detail-page">
       <PageHeader
-        title="Verify connection"
-        parent={{ name: "Connectors", href: "/library/connectors" }}
+        title={t("verify.title")}
+        parent={{ name: t("library.connectors"), href: "/library/connectors" }}
       />
       <main className="detail-content resource-page">
         {error ? (
@@ -52,7 +52,7 @@ export function ConnectorVerification({ csrf }: { csrf: string }) {
           nativeButton={false}
           render={<Link href="/library/connectors" />}
         >
-          Return to connectors
+          {t("verify.return")}
         </Button>
       </main>
     </div>

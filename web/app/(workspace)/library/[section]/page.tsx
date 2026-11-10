@@ -3,14 +3,15 @@ import { ResourceView } from "@/components/workspace/resource-view"
 import { librarySections, type LibrarySection } from "@/lib/foundation"
 import { accountEnabled, getResources, getSession } from "@/lib/api"
 import { PersonalResources } from "@/components/workspace/personal-resources"
+import { getTranslator } from "@/lib/i18n-server"
 
 type Props = { params: Promise<{ section: string }> }
 
 export async function generateMetadata({ params }: Props) {
   const { section } = await params
-  return {
-    title: librarySections[section as LibrarySection]?.name || "Library",
-  }
+  const { t } = await getTranslator()
+  const entry = librarySections[section as LibrarySection]
+  return { title: entry ? t(entry.nameKey) : t("meta.library") }
 }
 
 export default async function Library({ params }: Props) {

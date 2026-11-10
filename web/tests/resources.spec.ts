@@ -66,7 +66,7 @@ test("personal memory and skills persist through real API; MCP errors keep draft
   await page.goto("/library/skills")
   await page.getByRole("button", { name: "Upload skill", exact: true }).click()
   const name = `tea-${suffix}`
-  await page.getByLabel("SKILL.md or zip bundle").setInputFiles({
+  await page.getByLabel("Choose a skill file").setInputFiles({
     name: "SKILL.md",
     mimeType: "text/markdown",
     buffer: Buffer.from(
@@ -100,7 +100,8 @@ test("personal memory and skills persist through real API; MCP errors keep draft
 
   await page.goto("/library/connectors")
   await page
-    .getByRole("button", { name: "Add MCP server", exact: true })
+    .locator("header")
+    .getByRole("button", { name: "Add an MCP server", exact: true })
     .click()
   await page
     .getByRole("textbox", { name: "Name", exact: true })

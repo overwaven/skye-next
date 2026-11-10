@@ -1,19 +1,21 @@
 import { notFound } from "next/navigation"
 import { ProjectView } from "@/components/workspace/resource-view"
 import { accountEnabled, getProjects, getSession, getThreads } from "@/lib/api"
+import { getTranslator } from "@/lib/i18n-server"
 
 type Props = { params: Promise<{ projectId: string }> }
 
 export async function generateMetadata({ params }: Props) {
-  if (accountEnabled()) return { title: "Project" }
+  const { t } = await getTranslator()
+  if (accountEnabled()) return { title: t("meta.project") }
   if (process.env.NODE_ENV !== "development")
-    return { title: "Project unavailable" }
+    return { title: t("error.projectUnavailable") }
   const { projectId } = await params
   const { navigation } = await import("@/lib/preview-data")
   return {
     title:
       navigation.projects.find((project) => project.id === projectId)?.name ||
-      "Project",
+      t("meta.project"),
   }
 }
 

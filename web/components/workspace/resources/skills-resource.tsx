@@ -62,6 +62,7 @@ import {
   ResourceSearch,
   ResourceStatus,
 } from "@/components/workspace/resources/resource-ui"
+import { useI18n } from "@/components/i18n-provider"
 
 function downloadUrl(skill: SkillRecord) {
   return `/api/v1/skills/${encodeURIComponent(skill.id ?? "")}/download`
@@ -79,6 +80,7 @@ export function SkillsResource({
   skillDetail?: SkillRecord
 }) {
   const router = useRouter()
+  const { t } = useI18n()
   const { data, error: loadError, refresh } = useResourceSnapshot(
     initial,
     "skills"
@@ -166,7 +168,7 @@ export function SkillsResource({
     setError("")
     if (!file) return
     if (file.size > 25 * 1024 * 1024) {
-      setError("Use a skill smaller than 25 MB.")
+      setError(t("skills.tooLarge"))
       return
     }
     setPreviewLoading(true)
@@ -201,7 +203,7 @@ export function SkillsResource({
       setUploadOpen(false)
       setUpload(null)
       setPreview(null)
-      setStatus("Skill installed.")
+      setStatus(t("skills.installed"))
     })
   }
 
@@ -221,17 +223,17 @@ export function SkillsResource({
       })
       setSelected(null)
       setRemoveConfirm(false)
-      setStatus("Skill removed.")
+      setStatus(t("skills.removed"))
       if (detailId) router.replace("/library/skills")
     })
   }
 
   return (
     <ResourcePage
-      title="Skills"
+      title={t("skills.title")}
       action={
         <Button
-          aria-label="Upload skill"
+          aria-label={t("skills.upload")}
           disabled={busy}
           onClick={() => {
             setError("")
@@ -239,14 +241,14 @@ export function SkillsResource({
           }}
         >
           <HugeiconsIcon icon={Upload01Icon} data-icon="inline-start" />
-          <span className="hidden min-[380px]:inline">Upload skill</span>
+          <span className="hidden min-[380px]:inline">{t("skills.upload")}</span>
         </Button>
       }
     >
       <ResourceSearch
         value={query}
         onChange={setQuery}
-        placeholder="Search skills"
+        placeholder={t("skills.search")}
         className="sm:max-w-sm"
       />
       <ResourceStatus>{status}</ResourceStatus>
@@ -262,23 +264,23 @@ export function SkillsResource({
       {skills.length === 0 ? (
         <ResourceEmpty
           icon={<HugeiconsIcon icon={SparklesIcon} />}
-          title="No skills yet"
-          description="Teach Skye a repeated workflow."
+          title={t("skills.empty")}
+          description={t("skills.emptyDescription")}
           action={
             <Button onClick={() => setUploadOpen(true)}>
               <HugeiconsIcon icon={Upload01Icon} data-icon="inline-start" />
-              Upload a skill
+              {t("skills.uploadFirst")}
             </Button>
           }
         />
       ) : filtered.length === 0 ? (
         <ResourceEmpty
           icon={<HugeiconsIcon icon={SparklesIcon} />}
-          title="No skills found"
-          description="Try a different search."
+          title={t("skills.notFound")}
+          description={t("skills.tryDifferent")}
           action={
             <Button variant="outline" onClick={() => setQuery("")}>
-              Clear search
+              {t("skills.clearSearch")}
             </Button>
           }
         />
@@ -296,7 +298,7 @@ export function SkillsResource({
               >
                 <button
                   type="button"
-                  aria-label={`Open ${skill.name}`}
+                  aria-label={t("skills.open", { name: skill.name })}
                   className="absolute inset-0 z-0 rounded-none focus-visible:ring-3 focus-visible:ring-ring/50 focus-visible:outline-none"
                   onClick={() => openSkill(skill)}
                 />
@@ -319,7 +321,7 @@ export function SkillsResource({
                         <Button
                           variant="ghost"
                           size="icon-sm"
-                          aria-label={`Actions for ${skill.name}`}
+                          aria-label={t("skills.actionsFor", { name: skill.name })}
                         />
                       }
                     >
@@ -329,7 +331,7 @@ export function SkillsResource({
                       <DropdownMenuGroup>
                         <DropdownMenuItem onClick={() => openSkill(skill)}>
                           <HugeiconsIcon icon={EyeIcon} />
-                          View details
+                          {t("common.viewDetails")}
                         </DropdownMenuItem>
                         <DropdownMenuItem
                           render={
@@ -337,7 +339,7 @@ export function SkillsResource({
                           }
                         >
                           <HugeiconsIcon icon={Download01Icon} />
-                          Download
+                          {t("skills.download")}
                         </DropdownMenuItem>
                         <DropdownMenuItem
                           variant="destructive"
@@ -347,7 +349,7 @@ export function SkillsResource({
                           }}
                         >
                           <HugeiconsIcon icon={Delete02Icon} />
-                          Remove
+                          {t("skills.remove")}
                         </DropdownMenuItem>
                       </DropdownMenuGroup>
                     </DropdownMenuContent>
@@ -388,11 +390,11 @@ export function SkillsResource({
                 className="flex min-h-0 flex-1 flex-col gap-0"
               >
                 <div className="border-b px-6 py-3">
-                  <TabsList aria-label={`${selected.name} details`}>
+                  <TabsList aria-label={t("skills.detailsAria", { name: selected.name })}>
                     <TabsTrigger value="instructions">
-                      Instructions
+                      {t("skills.instructions")}
                     </TabsTrigger>
-                    <TabsTrigger value="files">Files</TabsTrigger>
+                    <TabsTrigger value="files">{t("skills.files")}</TabsTrigger>
                   </TabsList>
                 </div>
                 <TabsContent
@@ -424,7 +426,7 @@ export function SkillsResource({
                   ) : (
                     <Empty>
                       <EmptyHeader>
-                        <EmptyTitle>No instructions</EmptyTitle>
+                        <EmptyTitle>{t("skills.noInstructions")}</EmptyTitle>
                       </EmptyHeader>
                     </Empty>
                   )}
@@ -451,7 +453,7 @@ export function SkillsResource({
                   ) : (
                     <Empty>
                       <EmptyHeader>
-                        <EmptyTitle>No files</EmptyTitle>
+                        <EmptyTitle>{t("skills.noFiles")}</EmptyTitle>
                       </EmptyHeader>
                     </Empty>
                   )}
@@ -466,7 +468,7 @@ export function SkillsResource({
                 {removeConfirm ? (
                   <div className="flex w-full flex-col gap-3">
                     <p className="text-sm text-muted-foreground">
-                      Remove this skill? New runs will not use it.
+                      {t("skills.removeQuestion")}
                     </p>
                     <div className="flex justify-end gap-2">
                       <Button
@@ -474,7 +476,7 @@ export function SkillsResource({
                         disabled={busy}
                         onClick={() => setRemoveConfirm(false)}
                       >
-                        Cancel
+                        {t("common.cancel")}
                       </Button>
                       <Button
                         variant="destructive"
@@ -482,7 +484,7 @@ export function SkillsResource({
                         onClick={deleteSkill}
                       >
                         {busy && <Spinner data-icon="inline-start" />}
-                        Remove
+                        {t("skills.remove")}
                       </Button>
                     </div>
                   </div>
@@ -497,7 +499,7 @@ export function SkillsResource({
                         icon={Delete02Icon}
                         data-icon="inline-start"
                       />
-                      Remove skill
+                      {t("skills.removeSkill")}
                     </Button>
                     <Button
                       variant="outline"
@@ -510,7 +512,7 @@ export function SkillsResource({
                         icon={Download01Icon}
                         data-icon="inline-start"
                       />
-                      Download
+                      {t("skills.download")}
                     </Button>
                   </div>
                 )}
@@ -532,9 +534,9 @@ export function SkillsResource({
             className="flex min-h-0 flex-1 flex-col"
           >
             <SheetHeader className="border-b p-6 pr-14">
-              <SheetTitle>Upload skill</SheetTitle>
+              <SheetTitle>{t("skills.uploadTitle")}</SheetTitle>
               <SheetDescription>
-                Install a SKILL.md file or a zip bundle.
+                {t("skills.uploadDescription")}
               </SheetDescription>
             </SheetHeader>
             <div className="min-h-0 flex-1 overflow-y-auto p-6">
@@ -551,7 +553,7 @@ export function SkillsResource({
                   <HugeiconsIcon icon={Upload01Icon} />
                 </div>
                 <span className="font-medium">
-                  {preview ? preview.name : "Choose a skill file"}
+                  {preview ? preview.name : t("skills.chooseFile")}
                 </span>
                 <span className="text-sm text-muted-foreground">
                   SKILL.md or .zip
@@ -561,7 +563,7 @@ export function SkillsResource({
                   type="file"
                   name="skill"
                   accept=".md,.zip"
-                  aria-label="SKILL.md or zip bundle"
+                  aria-label={t("skills.chooseFile")}
                   disabled={busy || previewLoading}
                   onChange={(event) =>
                     void pickSkill(event.target.files?.[0])
@@ -609,11 +611,11 @@ export function SkillsResource({
                 disabled={busy}
                 onClick={closeUpload}
               >
-                Cancel
+                {t("common.cancel")}
               </Button>
               <Button type="submit" disabled={busy || !preview}>
                 {busy && <Spinner data-icon="inline-start" />}
-                Install skill
+                {t("skills.installAction")}
               </Button>
             </SheetFooter>
           </form>

@@ -49,6 +49,7 @@ import type { MediaRecord } from "@/lib/contracts.generated"
 import { MediaPreview } from "@/components/workspace/media-preview"
 import { Separator } from "@/components/ui/separator"
 import { cn } from "@/lib/utils"
+import { useI18n } from "@/components/i18n-provider"
 
 type Upload = {
   key: string
@@ -88,6 +89,7 @@ export function MediaPicker({
   selected: MediaRecord[]
   onToggle: (media: MediaRecord) => void
 }) {
+  const { t } = useI18n()
   const [items, setItems] = React.useState<MediaRecord[]>([])
   const [loading, setLoading] = React.useState(false)
   const [uploading, setUploading] = React.useState<Upload[]>([])
@@ -108,7 +110,7 @@ export function MediaPicker({
     setError("")
     fetch("/api/v1/media", { cache: "no-store" })
       .then(async (response) => {
-        if (!response.ok) throw new Error("The library is unavailable.")
+        if (!response.ok) throw new Error(t("media.libraryUnavailable"))
         const data = (await response.json()) as { media: MediaRecord[] }
         if (!cancelled)
           setItems((current) => {
@@ -121,7 +123,7 @@ export function MediaPicker({
           })
       })
       .catch(() => {
-        if (!cancelled) setError("The library is unavailable.")
+        if (!cancelled) setError(t("media.libraryUnavailable"))
       })
       .finally(() => {
         if (!cancelled) setLoading(false)
@@ -162,13 +164,13 @@ export function MediaPicker({
         setItems((current) => [media, ...current])
         onToggle(media)
       } else {
-        setError("That file could not be attached.")
+        setError(t("media.couldNotAttach"))
       }
     }
     request.onerror = () => {
       requests.current.delete(key)
       setUploading((current) => current.filter((item) => item.key !== key))
-      setError("The upload was interrupted. Try again.")
+      setError(t("media.uploadInterrupted"))
     }
     request.send(file)
   }
@@ -179,7 +181,7 @@ export function MediaPicker({
       { method: "DELETE", headers: { "X-CSRF-Token": csrfToken } }
     )
     if (!response.ok) {
-      setError("That file could not be removed.")
+      setError(t("media.couldNotRemove"))
       return
     }
     setItems((current) => current.filter((item) => item.id !== media.id))
@@ -203,8 +205,10 @@ export function MediaPicker({
         <AttachmentTrigger
           aria-label={
             media.availability === "expired"
-              ? `${media.name} has expired`
-              : `${picked ? "Remove" : "Attach"} ${media.name}`
+              ? t("media.hasExpired", { name: media.name })
+              : picked
+                ? t("media.remove", { name: media.name })
+                : t("media.attach", { name: media.name })
           }
           disabled={media.availability === "expired"}
           onClick={() => onToggle(media)}
@@ -226,12 +230,12 @@ export function MediaPicker({
           <AttachmentTitle>{media.name}</AttachmentTitle>
           <AttachmentDescription>
             {media.availability === "expired"
-              ? "Expired"
+              ? t("media.expired")
               : audio(media)
-                ? "Audio"
+                ? t("media.audioFile")
                 : media.is_image
-                  ? "Image"
-                  : "Document"}
+                  ? t("media.image")
+                  : t("media.document")}
           </AttachmentDescription>
         </AttachmentContent>
         <span className="media-size">{sizeLabel(media.size)}</span>
@@ -247,7 +251,7 @@ export function MediaPicker({
                 <Button
                   variant="ghost"
                   size="icon-sm"
-                  aria-label={`Actions for ${media.name}`}
+                  aria-label={t("media.actionsFor", { name: media.name })}
                 />
               }
             >
@@ -257,7 +261,7 @@ export function MediaPicker({
               <DropdownMenuGroup>
                 <DropdownMenuItem onClick={() => setPreview(media)}>
                   <HugeiconsIcon icon={EyeIcon} />
-                  Preview
+                  {t("media.preview")}
                 </DropdownMenuItem>
                 {media.availability === "available" && (
                   <DropdownMenuItem
@@ -269,7 +273,7 @@ export function MediaPicker({
                     }
                   >
                     <HugeiconsIcon icon={Download01Icon} />
-                    Download
+                    {t("media.download")}
                   </DropdownMenuItem>
                 )}
               </DropdownMenuGroup>
@@ -280,7 +284,7 @@ export function MediaPicker({
                   onClick={() => void remove(media)}
                 >
                   <HugeiconsIcon icon={Delete02Icon} />
-                  Delete
+                  {t("common.delete")}
                 </DropdownMenuItem>
               </DropdownMenuGroup>
             </DropdownMenuContent>
@@ -295,15 +299,15 @@ export function MediaPicker({
       <Dialog open={open} onOpenChange={onOpenChange}>
         <DialogContent className="max-h-[85dvh] sm:max-w-3xl">
           <DialogHeader>
-            <DialogTitle>Files</DialogTitle>
+            <DialogTitle>{t("media.files")}</DialogTitle>
             <DialogDescription className="sr-only">
-              Attach a saved file or upload a new one.
+              {t("media.description")}
             </DialogDescription>
           </DialogHeader>
           <div className="media-toolbar">
             <Button variant="outline" onClick={() => input.current?.click()}>
               <HugeiconsIcon icon={Upload01Icon} data-icon="inline-start" />
-              Upload
+              {t("media.upload")}
             </Button>
             <input
               ref={input}
@@ -324,8 +328,8 @@ export function MediaPicker({
               <Input
                 value={query}
                 onChange={(event) => setQuery(event.target.value)}
-                placeholder="Search files"
-                aria-label="Search files"
+                placeholder={t("media.search")}
+                aria-label={t("media.search")}
                 className="ps-9"
               />
             </div>
@@ -334,16 +338,16 @@ export function MediaPicker({
               onValueChange={(value) =>
                 setFilter((value[0] as Filter) ?? "all")
               }
-              aria-label="File type"
+              aria-label={t("media.fileType")}
             >
-              <ToggleGroupItem value="all">All</ToggleGroupItem>
-              <ToggleGroupItem value="images" aria-label="Images">
+              <ToggleGroupItem value="all">{t("common.all")}</ToggleGroupItem>
+              <ToggleGroupItem value="images" aria-label={t("media.images")}>
                 <HugeiconsIcon icon={Image01Icon} />
               </ToggleGroupItem>
-              <ToggleGroupItem value="audio" aria-label="Audio">
+              <ToggleGroupItem value="audio" aria-label={t("media.audio")}>
                 <HugeiconsIcon icon={MusicNote01Icon} />
               </ToggleGroupItem>
-              <ToggleGroupItem value="files" aria-label="Documents">
+              <ToggleGroupItem value="files" aria-label={t("media.documents")}>
                 <HugeiconsIcon icon={File01Icon} />
               </ToggleGroupItem>
             </ToggleGroup>
@@ -356,12 +360,12 @@ export function MediaPicker({
               onValueChange={(value) =>
                 setView((value[0] as "grid" | "list") ?? "grid")
               }
-              aria-label="Layout"
+              aria-label={t("media.layout")}
             >
-              <ToggleGroupItem value="grid" aria-label="Grid view">
+              <ToggleGroupItem value="grid" aria-label={t("media.grid")}>
                 <HugeiconsIcon icon={GridViewIcon} />
               </ToggleGroupItem>
-              <ToggleGroupItem value="list" aria-label="List view">
+              <ToggleGroupItem value="list" aria-label={t("media.list")}>
                 <HugeiconsIcon icon={ListViewIcon} />
               </ToggleGroupItem>
             </ToggleGroup>
@@ -380,7 +384,7 @@ export function MediaPicker({
                   setUploading((current) => current.slice(1))
                 }}
               >
-                Cancel
+                {t("media.cancelUpload")}
               </Button>
             </div>
           )}
@@ -391,7 +395,9 @@ export function MediaPicker({
             </div>
           ) : visible.length === 0 ? (
             <p className="py-12 text-center text-sm text-muted-foreground">
-              {query || filter !== "all" ? "No matches." : "Nothing saved yet."}
+              {query || filter !== "all"
+                ? t("media.noMatches")
+                : t("media.nothingSaved")}
             </p>
           ) : view === "grid" ? (
             <div className="media-grid">
@@ -402,9 +408,9 @@ export function MediaPicker({
           ) : (
             <ul className="media-list">
               <li className="media-list-head" aria-hidden="true">
-                <span>Name</span>
-                <span>Type</span>
-                <span>Size</span>
+                <span>{t("media.name")}</span>
+                <span>{t("media.type")}</span>
+                <span>{t("media.size")}</span>
                 <span />
               </li>
               {visible.map((media) => (

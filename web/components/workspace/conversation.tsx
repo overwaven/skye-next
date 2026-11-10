@@ -96,6 +96,12 @@ import type {
   VisibleMessage,
 } from "@/lib/contracts.generated"
 import type { PreviewState } from "@/lib/foundation"
+import { useI18n } from "@/components/i18n-provider"
+import {
+  translateServerMessage,
+  type MessageKey,
+  type MessageValues,
+} from "@/lib/i18n"
 
 type Connection = "connecting" | "live" | "reconnecting"
 
@@ -118,7 +124,75 @@ type Step = {
 
 const ACTIVE = new Set(["accepted", "running", "cancelling"])
 
-function steps(activities: ActivityRecord[]): Step[] {
+type Translate = (key: MessageKey, values?: MessageValues) => string
+
+const activityKeys: Record<string, MessageKey> = {
+  "Searched the web": "chat.labelSearched",
+  "Searching the web": "chat.labelSearching",
+  "Generating image": "chat.labelGeneratingImage",
+  "Editing image": "chat.labelEditingImage",
+  "Ran a command": "chat.labelRanCommand",
+  "Ran code": "chat.labelRanCode",
+  "Saved a memory": "chat.labelSavedMemory",
+  "Looked up a memory": "chat.labelLookedUpMemory",
+  "Forgot a memory": "chat.labelForgotMemory",
+  "Used a connected app": "chat.labelUsedApp",
+  "Listed automations": "chat.labelListedAutomations",
+  "Created a scheduled automation": "chat.labelCreatedScheduled",
+  "Created a webhook automation": "chat.labelCreatedWebhook",
+  "Updated an automation": "chat.labelUpdatedAutomation",
+  "Showed webhook details": "chat.labelShowedWebhook",
+  "Deleted an automation": "chat.labelDeletedAutomation",
+  "Recorded a voice reply": "chat.labelRecordedVoice",
+  "Recording a voice reply": "chat.labelRecordingVoice",
+}
+
+function categoryLabel(category: string, t: Translate) {
+  return (
+    ({
+      web: t("chat.activityWeb"),
+      image: t("chat.activityImage"),
+      voice: t("chat.activityVoice"),
+      code: t("chat.activityCode"),
+      memory: t("chat.activityMemory"),
+      connector: t("chat.activityConnector"),
+      automation: t("chat.activityAutomation"),
+      tool: t("chat.activityTool"),
+    } as Record<string, string>)[category] ?? t("chat.activityTool")
+  )
+}
+
+function activityLabel(
+  label: string,
+  category: string,
+  locale: string,
+  t: Translate
+) {
+  const key = activityKeys[label]
+  if (key) return t(key)
+  if (label && locale === "en") return label
+  return categoryLabel(category, t)
+}
+
+function runLabel(state: RunStatus["state"], t: Translate) {
+  return (
+    ({
+      accepted: t("run.queued"),
+      running: t("run.working"),
+      completed: t("run.finished"),
+      failed: t("run.failed"),
+      cancelling: t("run.stopping"),
+      cancelled: t("run.stopped"),
+      interrupted: t("run.interrupted"),
+    } as Record<string, string>)[state] ?? t("run.working")
+  )
+}
+
+function steps(
+  activities: ActivityRecord[],
+  locale: string,
+  t: Translate
+): Step[] {
   const found = new Map<string, ActivityRecord>()
   for (const activity of activities) {
     const key =
@@ -142,19 +216,12 @@ function steps(activities: ActivityRecord[]): Step[] {
   }
   return [...found.entries()].map(([key, activity]) => ({
     key,
-    label:
-      activity.label ||
-      ({
-        web: "Searched the web",
-        image: "Worked on an image",
-        voice: "Recorded a voice reply",
-        code: "Ran a command",
-        memory: "Used memory",
-        connector: "Used a connected app",
-        automation: "Managed an automation",
-        tool: "Used a tool",
-      }[activity.category] ??
-        "Used a tool"),
+    label: activityLabel(
+      activity.label ?? "",
+      activity.category,
+      locale,
+      t
+    ),
     status: activity.status,
     category: activity.category,
     tool_name: activity.tool_name || "",
@@ -163,17 +230,16 @@ function steps(activities: ActivityRecord[]): Step[] {
   }))
 }
 
-function failureCopy(failure: RunStatus["failure"]): string {
+function failureCopy(failure: RunStatus["failure"], t: Translate): string {
   return (
     {
-      quota: "Your allowance is used and your Sparks balance is empty.",
-      provider: "The provider stopped the request. Nothing else was sent.",
-      moderation: "The request was blocked before it ran.",
-      context:
-        "This conversation is too long for the model. Try a shorter message.",
-      interrupted: "The request stopped before it finished.",
-      unknown: "The request did not finish. Review it before retrying.",
-    }[failure ?? "unknown"] ?? "The request did not finish."
+      quota: t("chat.failureQuota"),
+      provider: t("chat.failureProvider"),
+      moderation: t("chat.failureModeration"),
+      context: t("chat.failureContext"),
+      interrupted: t("chat.failureInterrupted"),
+      unknown: t("chat.failureUnknown"),
+    }[failure ?? "unknown"] ?? t("chat.failureFallback")
   )
 }
 
@@ -247,7 +313,8 @@ function RunTools({
   run: RunStatus
   activities: ActivityRecord[]
 }) {
-  const list = steps(activities)
+  const { t, tn, locale } = useI18n()
+  const list = steps(activities, locale, t)
   const stopped = run.state === "failed" || run.state === "interrupted"
   const [expanded, setExpanded] = React.useState<boolean | undefined>(undefined)
   if (list.length === 0 && !ACTIVE.has(run.state)) return null
@@ -259,7 +326,7 @@ function RunTools({
             <TraceIcon>
               <Spinner />
             </TraceIcon>
-            <TraceTitle>{run.label}</TraceTitle>
+            <TraceTitle>{runLabel(run.state, t)}</TraceTitle>
           </TraceLine>
         ) : (
           <TraceCollapsible
@@ -271,9 +338,7 @@ function RunTools({
                 <TraceIcon>
                   <HugeiconsIcon icon={ToolsIcon} />
                 </TraceIcon>
-                <TraceTitle>
-                  {list.length} {list.length === 1 ? "tool" : "tools"}
-                </TraceTitle>
+                <TraceTitle>{tn("chat.tools", list.length)}</TraceTitle>
               </TraceLine>
             </TraceCollapsibleTrigger>
             <TraceCollapsibleContent>
@@ -307,7 +372,7 @@ function RunTools({
                         {step.tool_args && (
                           <div className="flex flex-col gap-1.5">
                             <span className="text-xs font-medium text-muted-foreground">
-                              Input
+                              {t("chat.input")}
                             </span>
                             <CodeBlock size="sm">
                               <CodeBlockContent wrap>
@@ -319,7 +384,7 @@ function RunTools({
                         {step.tool_output && (
                           <div className="flex flex-col gap-1.5">
                             <span className="text-xs font-medium text-muted-foreground">
-                              Result
+                              {t("chat.result")}
                             </span>
                             <CodeBlock size="sm">
                               <CodeBlockContent wrap>
@@ -330,7 +395,7 @@ function RunTools({
                         )}
                         {!step.tool_args && !step.tool_output && (
                           <p className="text-sm text-muted-foreground">
-                            No details recorded for this step.
+                            {t("chat.noDetails")}
                           </p>
                         )}
                       </div>
@@ -347,7 +412,7 @@ function RunTools({
 }
 
 export function Conversation({
-  title = "New thread",
+  title,
   project,
   messages = [],
   state = "empty",
@@ -373,6 +438,7 @@ export function Conversation({
   initialActivities?: ActivityRecord[]
   defaultProjectId?: string | null
 }) {
+  const { t, locale } = useI18n()
   const router = useRouter()
   const connected = Boolean(csrfToken)
   const id = React.useId()
@@ -560,9 +626,12 @@ export function Conversation({
       } catch {
         parsed = null
       }
-      throw Object.assign(new Error(parsed?.message ?? "The request failed."), {
-        api: parsed,
-      })
+      throw Object.assign(
+        new Error(parsed?.message ?? t("chat.failureFallback")),
+        {
+          api: parsed,
+        }
+      )
     }
     return (await response.json()) as T
   }
@@ -634,14 +703,20 @@ export function Conversation({
       setPending(null)
       const api = (error as { api?: APIError }).api
       setFailure(
-        api ?? {
-          code: "unavailable",
-          message: "The message was not sent.",
-          recovery: "Your draft is still here. Try again.",
-          request_id: "",
-          retriable: true,
-          field_errors: {},
-        }
+        api
+          ? {
+              ...api,
+              message: translateServerMessage(locale, api.message),
+              recovery: translateServerMessage(locale, api.recovery),
+            }
+          : {
+              code: "unavailable",
+              message: t("chat.sendFailed"),
+              recovery: t("chat.draftStays"),
+              request_id: "",
+              retriable: true,
+              field_errors: {},
+            }
       )
     } finally {
       setSending(false)
@@ -652,7 +727,7 @@ export function Conversation({
     const text = draft.trim()
     if (!text || sending || (run && ACTIVE.has(run.state))) return
     if (!connected) {
-      setNotice("Not sent. Your draft stays here.")
+      setNotice(t("chat.notSent"))
       return
     }
     await send(text, selected, transcripts)
@@ -669,8 +744,8 @@ export function Conversation({
     } catch {
       setFailure({
         code: "unavailable",
-        message: "Stop did not reach Skye.",
-        recovery: "Try again in a moment.",
+        message: t("chat.stopFailed"),
+        recovery: t("chat.stopFailedRecovery"),
         request_id: "",
         retriable: true,
         field_errors: {},
@@ -692,7 +767,7 @@ export function Conversation({
       setHistory((existing) => mergeMessages(existing, page.messages))
       setOlderThan(page.older_than)
     } catch {
-      setNotice("Earlier messages could not be loaded.")
+      setNotice(t("chat.earlierFailed"))
     } finally {
       setLoadingOlder(false)
     }
@@ -738,7 +813,7 @@ export function Conversation({
   return (
     <div className="conversation-page">
       <PageHeader
-        title={current?.title ?? title}
+        title={current?.title ?? title ?? t("chat.newThreadTitle")}
         parent={
           currentProject
             ? {
@@ -758,12 +833,12 @@ export function Conversation({
               ) : (
                 <HugeiconsIcon icon={Folder01Icon} data-icon="inline-start" />
               )}
-              {chosenProject ? chosenProject.name : "No project"}
+              {chosenProject ? chosenProject.name : t("chat.noProject")}
             </DropdownMenuTrigger>
             <DropdownMenuContent align="end">
               <DropdownMenuGroup>
                 <DropdownMenuItem onClick={() => setNewProject(null)}>
-                  No project
+                  {t("chat.noProject")}
                 </DropdownMenuItem>
                 {projectList.map((item) => (
                   <DropdownMenuItem
@@ -779,7 +854,7 @@ export function Conversation({
               <DropdownMenuGroup>
                 <DropdownMenuItem onClick={() => setProjectCreator(true)}>
                   <HugeiconsIcon icon={Add01Icon} />
-                  New project
+                  {t("chat.newProject")}
                 </DropdownMenuItem>
               </DropdownMenuGroup>
             </DropdownMenuContent>
@@ -789,21 +864,21 @@ export function Conversation({
           <Button
             variant="outline"
             size="sm"
-            aria-label="Stop"
+            aria-label={t("chat.stop")}
             onClick={() => void stop()}
           >
             <HugeiconsIcon icon={StopIcon} data-icon="inline-start" />
-            <span className="hidden sm:inline">Stop</span>
+            <span className="hidden sm:inline">{t("chat.stop")}</span>
           </Button>
         )}
       </PageHeader>
-      <main className="conversation-main" aria-label="Conversation">
+      <main className="conversation-main" aria-label={t("chat.conversation")}>
         {preview && (
-          <p className="preview-notice">Preview · Sample conversation.</p>
+          <p className="preview-notice">{t("chat.previewNotice")}</p>
         )}
         {connected && connection === "reconnecting" && (
           <p className="preview-notice" role="status">
-            Reconnecting…
+            {t("chat.reconnecting")}
           </p>
         )}
         {failure && (
@@ -832,7 +907,7 @@ export function Conversation({
             <div
               className="transcript-loading"
               role="status"
-              aria-label="Loading sample conversation"
+              aria-label={t("chat.loadingSample")}
               aria-busy="true"
             >
               <Skeleton className="ms-auto h-18 w-3/5" />
@@ -846,7 +921,7 @@ export function Conversation({
                 <EmptyMedia>
                   <SkyeMark size={42} />
                 </EmptyMedia>
-                <EmptyTitle>Start a conversation.</EmptyTitle>
+                <EmptyTitle>{t("chat.start")}</EmptyTitle>
               </EmptyHeader>
             </Empty>
           ) : (
@@ -857,7 +932,7 @@ export function Conversation({
               <MessageScroller>
                 <MessageScrollerViewport
                   tabIndex={0}
-                  aria-label="Message history"
+                  aria-label={t("chat.history")}
                 >
                   <MessageScrollerContent
                     className="transcript-content"
@@ -872,7 +947,7 @@ export function Conversation({
                           onClick={() => void loadOlder()}
                         >
                           {loadingOlder ? <Spinner /> : null}
-                          Earlier messages
+                          {t("chat.earlierMessages")}
                         </Button>
                       </div>
                     )}
@@ -941,11 +1016,11 @@ export function Conversation({
                                 <TraceIcon>
                                   <Spinner />
                                 </TraceIcon>
-                                <TraceTitle>Searching the web</TraceTitle>
+                                <TraceTitle>{t("chat.activityWeb")}</TraceTitle>
                               </TraceLine>
                             </TraceCollapsibleTrigger>
                             <TraceCollapsibleContent>
-                              Preview activity.
+                              {t("chat.previewActivity")}
                             </TraceCollapsibleContent>
                           </TraceCollapsible>
                         </Trace>
@@ -964,14 +1039,14 @@ export function Conversation({
             <Alert>
               <AlertTitle>
                 {state === "failed"
-                  ? "The response was interrupted"
-                  : "Your free allowance has been used"}
+                  ? t("chat.responseInterrupted")
+                  : t("chat.freeAllowance")}
               </AlertTitle>
               <AlertDescription>
                 <p>
                   {state === "failed"
-                    ? "Sample error. Completed work may have taken effect."
-                    : "Sample limit state."}
+                    ? t("chat.sampleError")
+                    : t("chat.sampleLimit")}
                 </p>
                 <Button
                   variant="outline"
@@ -980,12 +1055,12 @@ export function Conversation({
                   onClick={() =>
                     setDetail(
                       state === "failed"
-                        ? "Retry is not connected in this preview."
-                        : "Balances are not connected in this preview."
+                        ? t("chat.previewRetry")
+                        : t("chat.previewBalances")
                     )
                   }
                 >
-                  {state === "failed" ? "Retry" : "Account"}
+                  {state === "failed" ? t("chat.retry") : t("chat.account")}
                 </Button>
               </AlertDescription>
             </Alert>
@@ -996,11 +1071,11 @@ export function Conversation({
               <Alert variant="destructive">
                 <AlertTitle>
                   {run.state === "interrupted"
-                    ? "Request interrupted"
-                    : "Skye stopped"}
+                    ? t("chat.requestInterrupted")
+                    : t("chat.stopped")}
                 </AlertTitle>
                 <AlertDescription>
-                  <p>{failureCopy(run.failure)}</p>
+                  <p>{failureCopy(run.failure, t)}</p>
                   {retryText && (
                     <Button
                       variant="outline"
@@ -1038,7 +1113,7 @@ export function Conversation({
           >
             <Field>
               <FieldLabel htmlFor={id} className="sr-only">
-                Message Skye
+                {t("chat.messageAria")}
               </FieldLabel>
               <InputGroup>
                 <InputGroupTextarea
@@ -1047,7 +1122,7 @@ export function Conversation({
                   name="message"
                   value={draft}
                   onChange={(event) => setDraft(event.target.value)}
-                  placeholder="Message Skye…"
+                  placeholder={t("chat.placeholder")}
                   aria-describedby={notice ? `${id}-hint` : undefined}
                   rows={2}
                   dir="auto"
@@ -1066,12 +1141,12 @@ export function Conversation({
                 <InputGroupAddon align="block-end">
                   <InputGroupButton
                     size="icon-sm"
-                    aria-label="Add files"
+                    aria-label={t("chat.addFiles")}
                     onClick={() =>
                       connected
                         ? setPicker(true)
                         : setDetail(
-                            "File uploads are not available in this preview."
+                            t("chat.previewFileUpload")
                           )
                     }
                   >
@@ -1093,12 +1168,8 @@ export function Conversation({
                   ) : (
                     <InputGroupButton
                       size="icon-sm"
-                      aria-label="Record a voice message"
-                      onClick={() =>
-                        setDetail(
-                          "Voice recording is not available in this preview."
-                        )
-                      }
+                      aria-label={t("chat.recordVoice")}
+                      onClick={() => setDetail(t("chat.previewVoice"))}
                     >
                       <HugeiconsIcon icon={Mic01Icon} />
                     </InputGroupButton>
@@ -1106,7 +1177,7 @@ export function Conversation({
                   <InputGroupButton
                     size="sm"
                     onClick={() =>
-                      setDetail("Model settings are not available yet.")
+                      setDetail(t("chat.previewModel"))
                     }
                   >
                     Sun Engine
@@ -1120,7 +1191,7 @@ export function Conversation({
                       size="icon-sm"
                       variant="destructive"
                       className="ms-auto"
-                      aria-label="Stop"
+                      aria-label={t("chat.stop")}
                       onClick={() => void stop()}
                     >
                       <HugeiconsIcon icon={StopIcon} />
@@ -1131,7 +1202,7 @@ export function Conversation({
                       variant="default"
                       type="submit"
                       className="ms-auto"
-                      aria-label="Send message"
+                      aria-label={t("chat.send")}
                       disabled={sending || !draft.trim()}
                     >
                       {sending ? (
@@ -1149,7 +1220,7 @@ export function Conversation({
             </Field>
           </form>
           <p role="status" aria-live="polite" className="sr-only">
-            {notice || (run && active ? run.label : "")}
+            {notice || (run && active ? runLabel(run.state, t) : "")}
           </p>
         </div>
       </main>
@@ -1180,11 +1251,11 @@ export function Conversation({
       >
         <DialogContent>
           <DialogHeader>
-            <DialogTitle>Not available</DialogTitle>
+            <DialogTitle>{t("chat.notAvailable")}</DialogTitle>
             <DialogDescription>{detail}</DialogDescription>
           </DialogHeader>
           <Button variant="outline" onClick={() => setDetail(null)}>
-            Close
+            {t("common.close")}
           </Button>
         </DialogContent>
       </Dialog>

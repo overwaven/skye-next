@@ -30,6 +30,7 @@ import { Spinner } from "@/components/ui/spinner"
 import { toast } from "@/components/ui/toast"
 import { CreateProjectDialog } from "@/components/workspace/create-project-dialog"
 import type { NavigationData } from "@/lib/foundation"
+import { useI18n } from "@/components/i18n-provider"
 
 export function ProjectMenu({
   project,
@@ -38,6 +39,7 @@ export function ProjectMenu({
   project: NavigationData["projects"][number]
   csrfToken: string
 }) {
+  const { t } = useI18n()
   const [editing, setEditing] = useState(false)
   const [removing, setRemoving] = useState(false)
   const [busy, setBusy] = useState(false)
@@ -57,19 +59,19 @@ export function ProjectMenu({
         }
       )
       if (!response.ok) {
-        setError("That project could not be deleted.")
+        setError(t("projectMenu.deleteFailed"))
         return
       }
       setRemoving(false)
       toast.add({
-        title: "Project deleted",
-        description: "Its threads are still here, now without a project.",
+        title: t("projectMenu.deleted"),
+        description: t("projectMenu.deletedDescription"),
         type: "success",
       })
       if (pathname === `/projects/${project.id}`) router.push("/chat")
       router.refresh()
     } catch {
-      setError("That project could not be deleted. Check your connection.")
+      setError(t("projectMenu.deleteConnection"))
     } finally {
       setBusy(false)
     }
@@ -84,7 +86,7 @@ export function ProjectMenu({
               variant="ghost"
               size="icon-sm"
               className="row-overflow"
-              aria-label={`Actions for ${project.name}`}
+              aria-label={t("projectMenu.actions", { name: project.name })}
             />
           }
         >
@@ -94,7 +96,7 @@ export function ProjectMenu({
           <DropdownMenuGroup>
             <DropdownMenuItem onClick={() => setEditing(true)}>
               <HugeiconsIcon icon={Edit02Icon} />
-              Edit project
+              {t("projectMenu.edit")}
             </DropdownMenuItem>
           </DropdownMenuGroup>
           <DropdownMenuSeparator />
@@ -107,7 +109,7 @@ export function ProjectMenu({
               }}
             >
               <HugeiconsIcon icon={Delete02Icon} />
-              Delete project
+              {t("projectMenu.delete")}
             </DropdownMenuItem>
           </DropdownMenuGroup>
         </DropdownMenuContent>
@@ -130,22 +132,21 @@ export function ProjectMenu({
       >
         <AlertDialogContent>
           <AlertDialogHeader>
-            <AlertDialogTitle>Delete {project.name}?</AlertDialogTitle>
+            <AlertDialogTitle>{t("projectMenu.deleteTitle", { name: project.name })}</AlertDialogTitle>
             <AlertDialogDescription>
-              The project and its instructions are removed. Its threads stay
-              and move to No project.
+              {t("projectMenu.deleteDescription")}
             </AlertDialogDescription>
           </AlertDialogHeader>
           {error && <p className="text-sm text-destructive">{error}</p>}
           <AlertDialogFooter>
-            <AlertDialogCancel disabled={busy}>Cancel</AlertDialogCancel>
+            <AlertDialogCancel disabled={busy}>{t("common.cancel")}</AlertDialogCancel>
             <Button
               variant="destructive"
               disabled={busy}
               onClick={() => void removeProject()}
             >
               {busy && <Spinner data-icon="inline-start" />}
-              Delete project
+              {t("projectMenu.delete")}
             </Button>
           </AlertDialogFooter>
         </AlertDialogContent>

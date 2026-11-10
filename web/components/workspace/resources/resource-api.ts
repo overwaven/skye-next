@@ -2,6 +2,18 @@
 
 import { useCallback, useEffect, useRef, useState } from "react"
 import type { ResourceSnapshot } from "@/lib/contracts.generated"
+import {
+  defaultLocale,
+  isLocale,
+  translate,
+  translateServerMessage,
+} from "@/lib/i18n"
+
+function currentLocale() {
+  if (typeof document === "undefined") return defaultLocale
+  const lang = document.documentElement.lang
+  return isLocale(lang) ? lang : defaultLocale
+}
 
 export async function resourceRequest<T>(
   path: string,
@@ -22,20 +34,19 @@ export async function resourceRequest<T>(
       ...(body === undefined ? {} : { body: JSON.stringify(body) }),
     })
   } catch {
-    throw new Error(
-      "Could not reach Skye. Check your connection and try again."
-    )
+    throw new Error(translate(currentLocale(), "resource.unreachable"))
   }
   if (!response.ok) {
     if (response.status === 401)
-      throw new Error("Your session expired. Sign in with Telegram again.")
+      throw new Error(translate(currentLocale(), "resource.sessionExpired"))
     if (response.status === 409)
-      throw new Error(
-        "This resource changed. Your draft is kept; close and reopen to review the latest version."
-      )
+      throw new Error(translate(currentLocale(), "resource.conflict"))
     const error = await response.json().catch(() => null)
+    const locale = currentLocale()
     throw new Error(
-      error?.message || "Could not save this change. Review it and try again."
+      error?.message
+        ? translateServerMessage(locale, error.message)
+        : translate(locale, "resource.saveFailed")
     )
   }
   return response.json()

@@ -6,6 +6,7 @@ import { HugeiconsIcon } from "@hugeicons/react"
 import { ArrowLeft01Icon } from "@hugeicons/core-free-icons"
 import { buttonVariants } from "@/components/ui/button"
 import { SidebarTrigger } from "@/components/ui/sidebar"
+import { useI18n } from "@/components/i18n-provider"
 
 export function PageHeader({
   title,
@@ -17,6 +18,7 @@ export function PageHeader({
   children?: React.ReactNode
 }) {
   const pathname = usePathname()
+  const { t } = useI18n()
   const showBack = Boolean(parent && pathname !== parent.href)
   return (
     <header className="workspace-header">
@@ -25,7 +27,7 @@ export function PageHeader({
         {parent && showBack && (
           <Link
             href={parent.href}
-            aria-label={`Back to ${parent.name}`}
+            aria-label={t("ui.backTo", { name: parent.name })}
             className={buttonVariants({ variant: "ghost", size: "icon-sm" })}
           >
             <HugeiconsIcon icon={ArrowLeft01Icon} />

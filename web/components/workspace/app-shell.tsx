@@ -25,6 +25,7 @@ import {
 } from "@hugeicons/core-free-icons"
 import { useTheme } from "next-themes"
 
+import { useI18n } from "@/components/i18n-provider"
 import { CreateProjectDialog } from "@/components/workspace/create-project-dialog"
 import { ThreadMenu } from "@/components/workspace/thread-menu"
 import { ProjectMenu } from "@/components/workspace/project-menu"
@@ -68,6 +69,7 @@ function Navigation({ data }: { data: NavigationData }) {
   const pathname = usePathname()
   const { setOpenMobile } = useSidebar()
   const { setTheme } = useTheme()
+  const { t } = useI18n()
   const [searchOpen, setSearchOpen] = useState(false)
   const [projectDialog, setProjectDialog] = useState(false)
   const router = useRouter()
@@ -132,14 +134,14 @@ function Navigation({ data }: { data: NavigationData }) {
   }
 
   return (
-    <Sidebar role="navigation" aria-label="Workspace navigation">
+    <Sidebar role="navigation" aria-label={t("nav.workspace")}>
       <SidebarHeader className="px-5 pt-6 pb-5">
         <div className="flex items-center justify-between gap-3">
           <Link
             href="/chat"
             className="brand-lockup"
             onClick={() => setOpenMobile(false)}
-            aria-label="Skye home"
+            aria-label={t("nav.skyeHome")}
           >
             <SkyeMark />
             <span>skye</span>
@@ -148,7 +150,7 @@ function Navigation({ data }: { data: NavigationData }) {
             variant="ghost"
             size="icon"
             className="lg:hidden"
-            aria-label="Close navigation"
+            aria-label={t("nav.close")}
             onClick={() => setOpenMobile(false)}
           >
             <HugeiconsIcon icon={Cancel01Icon} />
@@ -165,35 +167,35 @@ function Navigation({ data }: { data: NavigationData }) {
                 isActive={pathname === "/chat"}
               >
                 <HugeiconsIcon icon={Add01Icon} />
-                <span>New thread</span>
+                <span>{t("nav.newThread")}</span>
               </SidebarMenuButton>
             </SidebarMenuItem>
             <SidebarMenuItem>
               <SidebarMenuButton onClick={() => setSearchOpen(true)}>
                 <HugeiconsIcon icon={Search01Icon} />
-                <span>Search</span>
+                <span>{t("nav.search")}</span>
                 <Kbd className="ms-auto">⌘ K</Kbd>
               </SidebarMenuButton>
               <CommandDialog
                 open={searchOpen}
                 onOpenChange={setSearchOpen}
-                title="Search"
-                description="Search threads, projects and destinations."
+                title={t("nav.searchTitle")}
+                description={t("nav.searchDescription")}
               >
                 <Command>
                   <CommandInput
-                    aria-label="Search threads and destinations"
-                    placeholder="Search"
+                    aria-label={t("nav.searchAria")}
+                    placeholder={t("nav.search")}
                   />
                   <CommandList>
-                    <CommandEmpty>No matches. Try another name.</CommandEmpty>
-                    <CommandGroup heading="Threads">
+                    <CommandEmpty>{t("nav.noMatches")}</CommandEmpty>
+                    <CommandGroup heading={t("nav.threads")}>
                       <CommandItem
-                        value="New thread"
+                        value={t("nav.newThread")}
                         onSelect={() => go("/chat")}
                       >
                         <HugeiconsIcon icon={Add01Icon} />
-                        New thread
+                        {t("nav.newThread")}
                       </CommandItem>
                       {data.threads.map((item) => (
                         <CommandItem
@@ -207,7 +209,7 @@ function Navigation({ data }: { data: NavigationData }) {
                       ))}
                     </CommandGroup>
                     <CommandSeparator />
-                    <CommandGroup heading="Projects">
+                    <CommandGroup heading={t("nav.projects")}>
                       {data.projects.map((item) => (
                         <CommandItem
                           key={item.id}
@@ -220,18 +222,18 @@ function Navigation({ data }: { data: NavigationData }) {
                       ))}
                     </CommandGroup>
                     <CommandSeparator />
-                    <CommandGroup heading="Library">
+                    <CommandGroup heading={t("nav.library")}>
                       <CommandItem
-                        value="Library"
+                        value={t("nav.library")}
                         onSelect={() => go("/library")}
                       >
                         <HugeiconsIcon icon={LibraryIcon} />
-                        Library
+                        {t("nav.library")}
                       </CommandItem>
                       {Object.entries(librarySections).map(([key, value]) => (
                         <CommandItem
                           key={key}
-                          value={value.name}
+                          value={t(value.nameKey)}
                           onSelect={() => go(`/library/${key}`)}
                         >
                           <HugeiconsIcon
@@ -239,15 +241,15 @@ function Navigation({ data }: { data: NavigationData }) {
                               libraryIcons[key as keyof typeof libraryIcons]
                             }
                           />
-                          {value.name}
+                          {t(value.nameKey)}
                         </CommandItem>
                       ))}
                     </CommandGroup>
                     <CommandSeparator />
-                    <CommandGroup heading="Settings">
+                    <CommandGroup heading={t("nav.settings")}>
                       <CommandItem onSelect={() => go("/settings/general")}>
                         <HugeiconsIcon icon={Settings01Icon} />
-                        Settings
+                        {t("nav.settings")}
                       </CommandItem>
                     </CommandGroup>
                   </CommandList>
@@ -258,12 +260,12 @@ function Navigation({ data }: { data: NavigationData }) {
         </SidebarGroup>
         <SidebarGroup>
           <div className="flex items-center justify-between pe-1">
-            <SidebarGroupLabel>Projects</SidebarGroupLabel>
+            <SidebarGroupLabel>{t("nav.projects")}</SidebarGroupLabel>
             {data.accountConnected && data.csrfToken && (
               <Button
                 variant="ghost"
                 size="icon-xs"
-                aria-label="New project"
+                aria-label={t("nav.newProject")}
                 onClick={() => setProjectDialog(true)}
               >
                 <HugeiconsIcon icon={Add01Icon} />
@@ -293,7 +295,7 @@ function Navigation({ data }: { data: NavigationData }) {
         </SidebarGroup>
         {pinnedThreads.length > 0 && (
           <SidebarGroup>
-            <SidebarGroupLabel>Pinned</SidebarGroupLabel>
+            <SidebarGroupLabel>{t("nav.pinned")}</SidebarGroupLabel>
             <SidebarMenu>{pinnedThreads.map(threadItem)}</SidebarMenu>
           </SidebarGroup>
         )}
@@ -303,7 +305,7 @@ function Navigation({ data }: { data: NavigationData }) {
             onClick={() => setOpenMobile(false)}
             className="group/recent justify-between hover:text-sidebar-foreground"
           >
-            Recent threads
+            {t("nav.recentThreads")}
             <HugeiconsIcon
               icon={ArrowRight01Icon}
               className="opacity-60 transition-opacity group-hover/recent:opacity-100"
@@ -313,13 +315,13 @@ function Navigation({ data }: { data: NavigationData }) {
         </SidebarGroup>
         {recentThreads.length === 0 && pinnedThreads.length === 0 && (
           <p className="px-3 pb-2 text-sm text-muted-foreground">
-            No threads yet.
+            {t("nav.noThreads")}
           </p>
         )}
       </SidebarContent>
       <SidebarFooter className="gap-3 p-4">
         {data.localPreview && (
-          <span className="px-3 text-muted-foreground">Local preview</span>
+          <span className="px-3 text-muted-foreground">{t("nav.localPreview")}</span>
         )}
         <Link
           className={buttonVariants({
@@ -330,7 +332,7 @@ function Navigation({ data }: { data: NavigationData }) {
           onClick={() => setOpenMobile(false)}
         >
           <HugeiconsIcon icon={LibraryIcon} data-icon="inline-start" />
-          Library
+          {t("nav.library")}
         </Link>
         {data.preview && (
           <Link
@@ -338,8 +340,8 @@ function Navigation({ data }: { data: NavigationData }) {
             className="preview-link"
             onClick={() => setOpenMobile(false)}
           >
-            Preview <HugeiconsIcon icon={ArrowRight01Icon} />
-            <span className="sr-only"> — synthetic data, not connected</span>
+            {t("nav.preview")} <HugeiconsIcon icon={ArrowRight01Icon} />
+            <span className="sr-only">{t("nav.syntheticData")}</span>
           </Link>
         )}
         <DropdownMenu>
@@ -347,28 +349,32 @@ function Navigation({ data }: { data: NavigationData }) {
             render={<Button variant="ghost" className="w-full justify-start" />}
           >
             <HugeiconsIcon icon={Settings01Icon} data-icon="inline-start" />
-            Settings
+            {t("nav.settings")}
           </DropdownMenuTrigger>
           <DropdownMenuContent align="start" side="top">
             <DropdownMenuGroup>
-              <DropdownMenuLabel>Appearance</DropdownMenuLabel>
-              {["Light", "Dark", "System"].map((name) => (
+              <DropdownMenuLabel>{t("nav.appearance")}</DropdownMenuLabel>
+              {[
+                { value: "light", label: t("nav.themeLight") },
+                { value: "dark", label: t("nav.themeDark") },
+                { value: "system", label: t("nav.themeSystem") },
+              ].map((theme) => (
                 <DropdownMenuItem
-                  key={name}
-                  onClick={() => setTheme(name.toLowerCase())}
+                  key={theme.value}
+                  onClick={() => setTheme(theme.value)}
                 >
-                  {name}
+                  {theme.label}
                 </DropdownMenuItem>
               ))}
             </DropdownMenuGroup>
             <DropdownMenuGroup>
-              <DropdownMenuLabel>Account</DropdownMenuLabel>
+              <DropdownMenuLabel>{t("nav.account")}</DropdownMenuLabel>
               <DropdownMenuItem onClick={() => go("/settings/general")}>
-                Open settings
+                {t("nav.openSettings")}
               </DropdownMenuItem>
               {!data.accountConnected && (
                 <DropdownMenuItem onClick={() => go("/login")}>
-                  Sign in with Telegram
+                  {t("nav.signInTelegram")}
                 </DropdownMenuItem>
               )}
             </DropdownMenuGroup>
@@ -399,6 +405,7 @@ export function AppShell({
   data: NavigationData
   children: React.ReactNode
 }) {
+  const { t } = useI18n()
   const pathname = usePathname()
   const router = useRouter()
   const shell = useRef<HTMLDivElement>(null)
@@ -429,7 +436,7 @@ export function AppShell({
   return (
     <SidebarProvider className="workspace-shell" ref={shell}>
       <a href="#page-title" className="skip-link">
-        Skip to content
+        {t("nav.skipToContent")}
       </a>
       <Navigation data={data} />
       <div className="workspace-canvas">{children}</div>

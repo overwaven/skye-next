@@ -1,8 +1,12 @@
 import type { Metadata } from "next"
 import { ChatsView } from "@/components/workspace/chats-view"
 import { accountEnabled, getProjects, getSession, getThreads } from "@/lib/api"
+import { getTranslator } from "@/lib/i18n-server"
 
-export const metadata: Metadata = { title: "Chats" }
+export async function generateMetadata(): Promise<Metadata> {
+  const { t } = await getTranslator()
+  return { title: t("meta.chats") }
+}
 
 export default async function Chats() {
   if (!accountEnabled())

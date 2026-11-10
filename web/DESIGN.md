@@ -16,6 +16,9 @@ in the Library rather than a side panel.
 **Signature:** Context distinguishes project instructions from personal resources and
 eventually available resources from actual per-run use. It is not a decorative sidebar.
 
+**Language:** English is the default. A Russian device locale selects Russian on first
+visit; Settings → General persists an explicit choice for this browser.
+
 ## Data and jobs
 
 - Objects: personal projects/instructions, optional-project threads, ordered deliveries,

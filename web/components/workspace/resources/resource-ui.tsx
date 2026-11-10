@@ -26,6 +26,7 @@ import {
 } from "@/components/ui/input-group"
 import { Spinner } from "@/components/ui/spinner"
 import { cn } from "cn"
+import { useI18n } from "@/components/i18n-provider"
 
 export function ResourcePage({
   title,
@@ -36,9 +37,13 @@ export function ResourcePage({
   action?: ReactNode
   children: ReactNode
 }) {
+  const { t } = useI18n()
   return (
     <div className="detail-page">
-      <PageHeader title={title} parent={{ name: "Library", href: "/library" }}>
+      <PageHeader
+        title={title}
+        parent={{ name: t("library.title"), href: "/library" }}
+      >
         {action}
       </PageHeader>
       <main className="detail-content resource-page">{children}</main>
@@ -61,6 +66,7 @@ export function ResourceSearch({
   className?: string
   id?: string
 }) {
+  const { t } = useI18n()
   return (
     <InputGroup className={cn("h-10 bg-background", className)}>
       <InputGroupAddon>
@@ -84,7 +90,7 @@ export function ResourceSearch({
         <InputGroupAddon align="inline-end">
           <InputGroupButton
             size="icon-xs"
-            aria-label="Clear search"
+            aria-label={t("library.clearSearch")}
             onClick={() => onChange("")}
           >
             <HugeiconsIcon icon={Cancel01Icon} />
@@ -115,6 +121,7 @@ export function ResourceError({
   errorRef?: RefObject<HTMLDivElement | null>
   onRetry?: () => void
 }) {
+  const { t } = useI18n()
   return (
     <Alert variant="destructive">
       <HugeiconsIcon icon={AlertCircleIcon} />
@@ -122,7 +129,7 @@ export function ResourceError({
         {message}
         {onRetry && (
           <Button variant="link" size="sm" onClick={onRetry}>
-            Retry
+            {t("library.retry")}
           </Button>
         )}
       </AlertDescription>

@@ -1,11 +1,13 @@
 import { notFound } from "next/navigation"
 import { getResources, getSession, getSkill, accountEnabled } from "@/lib/api"
 import { PersonalResources } from "@/components/workspace/personal-resources"
+import { getTranslator } from "@/lib/i18n-server"
 
 type Props = { params: Promise<{ section: string; id: string }> }
 export async function generateMetadata({ params }: Props) {
   const { section } = await params
-  return { title: section === "skills" ? "Skill" : "Connector" }
+  const { t } = await getTranslator()
+  return { title: section === "skills" ? t("meta.skill") : t("meta.connector") }
 }
 export default async function ResourceDetail({ params }: Props) {
   const { section, id } = await params

@@ -82,36 +82,51 @@ import {
   ResourceStatus,
   SectionLabel,
 } from "@/components/workspace/resources/resource-ui"
+import { useI18n } from "@/components/i18n-provider"
+import type { MessageKey, MessageValues } from "@/lib/i18n"
 
+type Translate = (key: MessageKey, values?: MessageValues) => string
 type ConnectorStatusTone = "secondary" | "outline" | "destructive"
 
-function connectorStatus(connector: ConnectorRecord): {
+function connectorStatus(
+  connector: ConnectorRecord,
+  t: Translate
+): {
   label: string
   icon: typeof Add01Icon
   tone: ConnectorStatusTone
 } {
   if (connector.kind === "custom") {
     return connector.status === "disabled"
-      ? { label: "Disabled", icon: AlertCircleIcon, tone: "destructive" }
-      : { label: "Ready", icon: ServerStack01Icon, tone: "secondary" }
+      ? {
+          label: t("connectors.disabled"),
+          icon: AlertCircleIcon,
+          tone: "destructive",
+        }
+      : {
+          label: t("connectors.ready"),
+          icon: ServerStack01Icon,
+          tone: "secondary",
+        }
   }
   if (connector.status === "connected")
     return {
-      label: "Connected",
+      label: t("connectors.connected"),
       icon: CheckmarkCircle02Icon,
       tone: "secondary",
     }
   if (connector.status === "pending")
-    return { label: "Pending", icon: Clock01Icon, tone: "outline" }
+    return { label: t("connectors.pending"), icon: Clock01Icon, tone: "outline" }
   return {
-    label: "Needs attention",
+    label: t("connectors.attention"),
     icon: AlertCircleIcon,
     tone: "destructive",
   }
 }
 
 function ConnectorStatusBadge({ connector }: { connector: ConnectorRecord }) {
-  const meta = connectorStatus(connector)
+  const { t } = useI18n()
+  const meta = connectorStatus(connector, t)
   return (
     <Badge variant={meta.tone} className="gap-1.5 font-normal">
       <HugeiconsIcon icon={meta.icon} />
@@ -173,6 +188,7 @@ function ConnectorPopover({
   onRemove: (connector: ConnectorRecord) => void
   onRefresh: () => void
 }) {
+  const { t } = useI18n()
   const [open, setOpen] = useState(Boolean(defaultOpen))
   const [testing, setTesting] = useState(false)
   const [testStatus, setTestStatus] = useState("")
@@ -187,7 +203,7 @@ function ConnectorPopover({
         "POST",
         {}
       )
-      setTestStatus(`Reachable · ${result.tools} tools`)
+      setTestStatus(t("connectors.reachable", { count: result.tools }))
     } catch (error) {
       setTestStatus((error as Error).message)
     } finally {
@@ -233,14 +249,14 @@ function ConnectorPopover({
                 }}
                 disabled={busy}
               >
-                Edit server
+                {t("connectors.editServer")}
               </ActionRow>
               <ActionRow
                 icon={Refresh01Icon}
                 onClick={() => void testConnection()}
                 disabled={testing}
               >
-                {testing ? "Testing…" : "Test connection"}
+                {testing ? t("connectors.testing") : t("connectors.test")}
               </ActionRow>
               <ActionRow
                 icon={Delete02Icon}
@@ -251,7 +267,7 @@ function ConnectorPopover({
                 }}
                 disabled={busy}
               >
-                Remove server
+                {t("connectors.removeServer")}
               </ActionRow>
             </>
           ) : (
@@ -264,7 +280,9 @@ function ConnectorPopover({
                 }}
                 disabled={busy || !consentEnabled}
               >
-                {connector.status === "connected" ? "Reconnect" : "Connect"}
+                {connector.status === "connected"
+                  ? t("connectors.reconnect")
+                  : t("connectors.connect")}
               </ActionRow>
               <ActionRow
                 icon={Refresh01Icon}
@@ -274,7 +292,7 @@ function ConnectorPopover({
                 }}
                 disabled={busy}
               >
-                Check status
+                {t("connectors.checkStatus")}
               </ActionRow>
               <ActionRow
                 icon={Delete02Icon}
@@ -285,7 +303,7 @@ function ConnectorPopover({
                 }}
                 disabled={busy}
               >
-                Disconnect
+                {t("connectors.disconnect")}
               </ActionRow>
             </>
           )}
@@ -437,6 +455,7 @@ export function ConnectorsResource({
   csrf: string
   detailId?: string
 }) {
+  const { t } = useI18n()
   const { data, error: loadError, refresh } = useResourceSnapshot(
     initial,
     "connectors"
@@ -531,11 +550,11 @@ export function ConnectorsResource({
       if (result.url) {
         const parsed = new URL(result.url)
         if (parsed.protocol !== "https:")
-          throw new Error("The consent link is unavailable. Try again.")
+          throw new Error(t("connectors.consentUnavailable"))
         window.location.assign(parsed.href)
         return
       }
-      setStatus(`${connector.name} connected.`)
+      setStatus(t("connectors.connectedToast", { name: connector.name }))
     })
   }
 
@@ -564,7 +583,7 @@ export function ConnectorsResource({
         { name, url, ...(includeHeaders ? { headers } : {}) }
       )
       setServerOpen(false)
-      setStatus(server ? "Server updated." : "Server added.")
+      setStatus(server ? t("connectors.updated") : t("connectors.added"))
     })
   }
 
@@ -580,7 +599,9 @@ export function ConnectorsResource({
       )
       setRemove(null)
       setStatus(
-        remove.kind === "custom" ? "Server removed." : "App disconnected."
+        remove.kind === "custom"
+          ? t("connectors.removed")
+          : t("connectors.disconnected")
       )
     })
   }
@@ -589,39 +610,39 @@ export function ConnectorsResource({
   const hasMatches = filteredApps.length + filteredServers.length > 0
   const appStatus = !data.apps_configured
     ? {
-        text: "App connections aren't configured on this deployment.",
+        text: t("connectors.noAppsConfigured"),
         retry: false,
       }
     : !data.app_consent_enabled
       ? {
-          text: "Connecting apps is paused until consent verification is configured.",
+          text: t("connectors.consentPending"),
           retry: false,
         }
       : !data.provider_verified
-        ? { text: "App status couldn't be verified.", retry: true }
+        ? { text: t("connectors.statusUnverified"), retry: true }
         : null
 
   return (
     <ResourcePage
-      title="Connectors"
+      title={t("connectors.title")}
       action={
         <>
           <Button
-            aria-label="Browse apps"
+            aria-label={t("connectors.browse")}
             disabled={!data.apps_configured || busy}
             onClick={openCatalog}
           >
             <HugeiconsIcon icon={AppStoreIcon} data-icon="inline-start" />
-            <span className="hidden min-[380px]:inline">Browse apps</span>
+            <span className="hidden min-[380px]:inline">{t("connectors.browse")}</span>
           </Button>
           <Button
             variant="outline"
-            aria-label="Add MCP server"
+            aria-label={t("connectors.addMcp")}
             disabled={busy}
             onClick={() => openServer(null)}
           >
             <HugeiconsIcon icon={Add01Icon} data-icon="inline-start" />
-            <span className="hidden sm:inline">Add server</span>
+            <span className="hidden sm:inline">{t("connectors.addServer")}</span>
           </Button>
         </>
       }
@@ -629,7 +650,7 @@ export function ConnectorsResource({
       <ResourceSearch
         value={query}
         onChange={setQuery}
-        placeholder="Search connectors"
+        placeholder={t("connectors.search")}
         className="sm:max-w-sm"
       />
       <ResourceStatus>{status}</ResourceStatus>
@@ -641,7 +662,7 @@ export function ConnectorsResource({
             {appStatus.text}
             {appStatus.retry && (
               <Button variant="link" size="sm" onClick={() => void refresh()}>
-                Retry
+                {t("common.retry")}
               </Button>
             )}
           </AlertDescription>
@@ -659,8 +680,8 @@ export function ConnectorsResource({
       {!hasAny ? (
         <ResourceEmpty
           icon={<HugeiconsIcon icon={Plug01Icon} />}
-          title="No connectors yet"
-          description="Connect an app or add an MCP server for Skye."
+          title={t("connectors.empty")}
+          description={t("connectors.emptyDescription")}
           action={
             <div className="flex flex-wrap items-center justify-center gap-2">
               {data.apps_configured && (
@@ -669,12 +690,12 @@ export function ConnectorsResource({
                     icon={AppStoreIcon}
                     data-icon="inline-start"
                   />
-                  Browse apps
+                  {t("connectors.browse")}
                 </Button>
               )}
               <Button variant="outline" onClick={() => openServer(null)}>
                 <HugeiconsIcon icon={Add01Icon} data-icon="inline-start" />
-                Add an MCP server
+                {t("connectors.addMcp")}
               </Button>
             </div>
           }
@@ -682,11 +703,11 @@ export function ConnectorsResource({
       ) : !hasMatches ? (
         <ResourceEmpty
           icon={<HugeiconsIcon icon={Search01Icon} />}
-          title="No connectors found"
-          description="Try a different search."
+          title={t("connectors.notFound")}
+          description={t("skills.tryDifferent")}
           action={
             <Button variant="outline" onClick={() => setQuery("")}>
-              Clear search
+              {t("connectors.clearSearch")}
             </Button>
           }
         />
@@ -694,7 +715,7 @@ export function ConnectorsResource({
         <>
           {filteredApps.length > 0 && (
             <section className="flex flex-col gap-3">
-              <SectionLabel count={filteredApps.length}>Apps</SectionLabel>
+              <SectionLabel count={filteredApps.length}>{t("connectors.apps")}</SectionLabel>
               <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
                 {filteredApps.map((connector) => (
                   <ConnectorTile
@@ -716,7 +737,7 @@ export function ConnectorsResource({
           {filteredServers.length > 0 && (
             <section className="flex flex-col gap-3">
               <SectionLabel count={filteredServers.length}>
-                MCP servers
+                {t("connectors.servers")}
               </SectionLabel>
               <ResourceList>
                 <div className="flex flex-col divide-y divide-border">
@@ -749,16 +770,16 @@ export function ConnectorsResource({
       >
         <SheetContent className="gap-0 p-0 data-[side=right]:w-full sm:data-[side=right]:max-w-md">
           <SheetHeader className="border-b p-6 pr-14">
-            <SheetTitle>Browse apps</SheetTitle>
+            <SheetTitle>{t("connectors.browseTitle")}</SheetTitle>
             <SheetDescription>
-              Choose an app for Skye to use.
+              {t("connectors.browseDescription")}
             </SheetDescription>
           </SheetHeader>
           <div className="border-b p-4">
             <ResourceSearch
               value={catalogQuery}
               onChange={setCatalogQuery}
-              placeholder="Search apps"
+              placeholder={t("connectors.searchApps")}
               loading={catalogLoading}
             />
           </div>
@@ -767,8 +788,7 @@ export function ConnectorsResource({
               <Alert>
                 <HugeiconsIcon icon={AlertCircleIcon} />
                 <AlertDescription>
-                  Connecting apps is disabled until consent verification is
-                  configured.
+                  {t("connectors.appsDisabled")}
                 </AlertDescription>
               </Alert>
             </div>
@@ -796,14 +816,14 @@ export function ConnectorsResource({
               ) : catalog.length === 0 ? (
                 <ResourceEmpty
                   icon={<HugeiconsIcon icon={Search01Icon} />}
-                  title="No apps found"
-                  description="Try a different search."
+                  title={t("connectors.noApps")}
+                  description={t("skills.tryDifferent")}
                   action={
                     <Button
                       variant="outline"
                       onClick={() => setCatalogQuery("")}
                     >
-                      Clear search
+                      {t("connectors.clearSearch")}
                     </Button>
                   }
                 />
@@ -838,7 +858,7 @@ export function ConnectorsResource({
                             disabled={busy || !data.app_consent_enabled}
                             onClick={() => connect(app)}
                           >
-                            Connect
+                            {t("connectors.connect")}
                           </Button>
                         )}
                       </div>
@@ -864,9 +884,9 @@ export function ConnectorsResource({
           >
             <SheetHeader className="border-b p-6 pr-14">
               <SheetTitle>
-                {server ? "Edit MCP server" : "Add MCP server"}
+                {server ? t("connectors.editTitle") : t("connectors.addTitle")}
               </SheetTitle>
-              <SheetDescription>Public HTTPS endpoints only.</SheetDescription>
+              <SheetDescription>{t("connectors.httpsOnly")}</SheetDescription>
             </SheetHeader>
             <div className="min-h-0 flex-1 overflow-y-auto p-6">
               {error && (
@@ -876,7 +896,7 @@ export function ConnectorsResource({
               )}
               <FieldGroup>
                 <Field>
-                  <FieldLabel htmlFor="mcp-name">Name</FieldLabel>
+                  <FieldLabel htmlFor="mcp-name">{t("connectors.name")}</FieldLabel>
                   <Input
                     id="mcp-name"
                     name="name"
@@ -887,7 +907,7 @@ export function ConnectorsResource({
                   />
                 </Field>
                 <Field>
-                  <FieldLabel htmlFor="mcp-url">HTTPS URL</FieldLabel>
+                  <FieldLabel htmlFor="mcp-url">{t("connectors.url")}</FieldLabel>
                   <Input
                     id="mcp-url"
                     name="url"
@@ -904,7 +924,7 @@ export function ConnectorsResource({
                 {server && data.credentials_configured && (
                   <Field orientation="horizontal">
                     <FieldLabel htmlFor="replace-credentials">
-                      Replace credentials
+                      {t("connectors.replaceCredentials")}
                     </FieldLabel>
                     <Switch
                       id="replace-credentials"
@@ -916,7 +936,7 @@ export function ConnectorsResource({
                 {(replaceCredentials || (!server && data.credentials_configured)) &&
                   data.credentials_configured && (
                     <Field>
-                      <FieldLabel htmlFor="mcp-headers">Headers</FieldLabel>
+                      <FieldLabel htmlFor="mcp-headers">{t("connectors.headers")}</FieldLabel>
                       <Textarea
                         id="mcp-headers"
                         name="headers"
@@ -927,7 +947,7 @@ export function ConnectorsResource({
                         rows={3}
                       />
                       <FieldDescription>
-                        One header per line. Values are never returned.
+                        {t("connectors.headersHint")}
                       </FieldDescription>
                     </Field>
                   )}
@@ -940,14 +960,14 @@ export function ConnectorsResource({
                 disabled={busy}
                 onClick={() => setServerOpen(false)}
               >
-                Cancel
+                {t("common.cancel")}
               </Button>
               <Button
                 type="submit"
                 disabled={busy || !name.trim() || !url.trim()}
               >
                 {busy && <Spinner data-icon="inline-start" />}
-                Save
+                {t("connectors.save")}
               </Button>
             </SheetFooter>
           </form>
@@ -964,13 +984,15 @@ export function ConnectorsResource({
           <AlertDialogHeader>
             <AlertDialogTitle>
               {remove?.kind === "custom"
-                ? `Remove ${remove.name}?`
-                : `Disconnect ${remove?.name ?? "this app"}?`}
+                ? t("connectors.removeTitle", { name: remove.name })
+                : t("connectors.disconnectTitle", {
+                    name: remove?.name ?? t("connectors.thisApp"),
+                  })}
             </AlertDialogTitle>
             <AlertDialogDescription>
               {remove?.kind === "custom"
-                ? "Skye will stop using this MCP server."
-                : "Skye will lose access. Existing actions already started can't be undone."}
+                ? t("connectors.removeDescription")
+                : t("connectors.disconnectDescription")}
             </AlertDialogDescription>
           </AlertDialogHeader>
           {error && (
@@ -979,14 +1001,16 @@ export function ConnectorsResource({
             </Alert>
           )}
           <AlertDialogFooter>
-            <AlertDialogCancel disabled={busy}>Cancel</AlertDialogCancel>
+            <AlertDialogCancel disabled={busy}>{t("common.cancel")}</AlertDialogCancel>
             <Button
               variant="destructive"
               disabled={busy}
               onClick={removeConnector}
             >
               {busy && <Spinner data-icon="inline-start" />}
-              {remove?.kind === "custom" ? "Remove" : "Disconnect"}
+              {remove?.kind === "custom"
+                ? t("connectors.removeConfirm")
+                : t("connectors.disconnectConfirm")}
             </Button>
           </AlertDialogFooter>
         </AlertDialogContent>

@@ -7,6 +7,7 @@ import { cn } from "cn"
 import { Button } from "@/components/ui/button"
 import { HugeiconsIcon } from "@hugeicons/react"
 import { Tick02Icon, Copy01Icon } from "@hugeicons/core-free-icons"
+import { useI18n } from "@/components/i18n-provider"
 
 const codeBlockVariants = cva(
   "group/code-block relative flex w-full min-w-0 flex-col overflow-hidden rounded-2xl text-sm has-[>[data-slot=code-block-content]:focus-visible]:ring-3 has-[>[data-slot=code-block-content]:focus-visible]:ring-ring/30 data-[size=sm]:rounded-xl data-[size=sm]:text-xs",
@@ -93,6 +94,7 @@ function CodeBlockCopyButton({
   onClick,
   ...props
 }: React.ComponentProps<typeof Button> & { value: string }) {
+  const { t } = useI18n()
   const [copied, setCopied] = React.useState(false)
 
   React.useEffect(() => {
@@ -111,7 +113,7 @@ function CodeBlockCopyButton({
         data-copied={copied || undefined}
         variant={variant}
         size={size}
-        aria-label={copied ? "Copied" : "Copy"}
+        aria-label={copied ? t("ui.copied") : t("ui.copy")}
         className={cn(
           "hover:bg-foreground/5 dark:hover:bg-foreground/10",
           className
@@ -132,7 +134,7 @@ function CodeBlockCopyButton({
         )}
       </Button>
       <span aria-live="polite" className="sr-only">
-        {copied ? "Copied" : ""}
+        {copied ? t("ui.copied") : ""}
       </span>
     </>
   )

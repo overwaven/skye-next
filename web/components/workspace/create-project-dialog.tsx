@@ -21,25 +21,27 @@ import {
   PopoverContent,
   PopoverTrigger,
 } from "@/components/ui/popover"
+import { useI18n } from "@/components/i18n-provider"
+import { translateServerMessage, type MessageKey } from "@/lib/i18n"
 
 const projectIcons = [
-  ["☁️", "Cloud"],
-  ["💬", "Chat"],
-  ["💻", "Code"],
-  ["⚙️", "Settings"],
-  ["💼", "Work"],
-  ["🎓", "Study"],
-  ["❤️", "Health"],
-  ["✨", "Sparkles"],
-  ["🌍", "World"],
-  ["🎨", "Art"],
-  ["🧪", "Science"],
-  ["🎵", "Music"],
-  ["📷", "Camera"],
-  ["📁", "Folder"],
-  ["💡", "Idea"],
-  ["⭐", "Star"],
-] as const
+  ["☁️", "projectDialog.cloud"],
+  ["💬", "projectDialog.chat"],
+  ["💻", "projectDialog.code"],
+  ["⚙️", "projectDialog.settings"],
+  ["💼", "projectDialog.work"],
+  ["🎓", "projectDialog.study"],
+  ["❤️", "projectDialog.health"],
+  ["✨", "projectDialog.sparkles"],
+  ["🌍", "projectDialog.world"],
+  ["🎨", "projectDialog.art"],
+  ["🧪", "projectDialog.science"],
+  ["🎵", "projectDialog.music"],
+  ["📷", "projectDialog.camera"],
+  ["📁", "projectDialog.folder"],
+  ["💡", "projectDialog.idea"],
+  ["⭐", "projectDialog.star"],
+] as const satisfies readonly (readonly [string, MessageKey])[]
 
 export function CreateProjectDialog({
   open,
@@ -60,6 +62,7 @@ export function CreateProjectDialog({
     revision?: number
   }
 }) {
+  const { t, locale } = useI18n()
   const [name, setName] = React.useState(project?.name ?? "")
   const [emoji, setEmoji] = React.useState(project?.emoji || "☁️")
   const [instructions, setInstructions] = React.useState(
@@ -98,8 +101,10 @@ export function CreateProjectDialog({
         } | null
         setError(
           response.status === 409
-            ? "This project changed. Close and reopen the editor before saving."
-            : (data?.message ?? "The project could not be saved.")
+            ? t("projectDialog.conflict")
+            : data?.message
+              ? translateServerMessage(locale, data.message)
+              : t("projectDialog.saveFailed")
         )
         return
       }
@@ -109,9 +114,7 @@ export function CreateProjectDialog({
       setInstructions("")
       onOpenChange(false)
     } catch {
-      setError(
-        "The project could not be saved. Check your connection and try again."
-      )
+      setError(t("projectDialog.connection"))
     } finally {
       setBusy(false)
     }
@@ -121,19 +124,21 @@ export function CreateProjectDialog({
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent>
         <DialogHeader>
-          <DialogTitle>{project ? "Edit project" : "New project"}</DialogTitle>
+          <DialogTitle>
+            {project ? t("projectDialog.editTitle") : t("projectDialog.newTitle")}
+          </DialogTitle>
         </DialogHeader>
         <FieldGroup>
           <div className="flex items-end gap-3">
             <Field className="w-20">
-              <FieldLabel htmlFor="project-emoji">Icon</FieldLabel>
+              <FieldLabel htmlFor="project-emoji">{t("projectDialog.icon")}</FieldLabel>
               <Popover open={iconsOpen} onOpenChange={setIconsOpen}>
                 <PopoverTrigger
                   render={
                     <Button
                       id="project-emoji"
                       variant="outline"
-                      aria-label="Choose project icon"
+                      aria-label={t("projectDialog.chooseIcon")}
                     />
                   }
                 >
@@ -143,13 +148,13 @@ export function CreateProjectDialog({
                   <div
                     className="grid grid-cols-4 gap-2"
                     role="group"
-                    aria-label="Project icons"
+                    aria-label={t("projectDialog.icons")}
                   >
-                    {projectIcons.map(([icon, label]) => (
+                    {projectIcons.map(([icon, labelKey]) => (
                       <Button
                         key={icon}
                         variant={emoji === icon ? "secondary" : "ghost"}
-                        aria-label={label}
+                        aria-label={t(labelKey)}
                         aria-pressed={emoji === icon}
                         onClick={() => {
                           setEmoji(icon)
@@ -164,7 +169,7 @@ export function CreateProjectDialog({
               </Popover>
             </Field>
             <Field className="flex-1">
-              <FieldLabel htmlFor="project-name">Name</FieldLabel>
+              <FieldLabel htmlFor="project-name">{t("projectDialog.name")}</FieldLabel>
               <Input
                 id="project-name"
                 value={name}
@@ -174,7 +179,7 @@ export function CreateProjectDialog({
             </Field>
           </div>
           <Field>
-            <FieldLabel htmlFor="project-instructions">Instructions</FieldLabel>
+            <FieldLabel htmlFor="project-instructions">{t("projectDialog.instructions")}</FieldLabel>
             <Textarea
               id="project-instructions"
               value={instructions}
@@ -187,7 +192,7 @@ export function CreateProjectDialog({
         {error && <p className="text-sm text-destructive">{error}</p>}
         <DialogFooter>
           <Button variant="outline" onClick={() => onOpenChange(false)}>
-            Cancel
+            {t("common.cancel")}
           </Button>
           <Button disabled={busy || !name.trim()} onClick={() => void create()}>
             {busy ? (
@@ -195,7 +200,7 @@ export function CreateProjectDialog({
             ) : (
               <HugeiconsIcon icon={Add01Icon} data-icon="inline-start" />
             )}
-            {project ? "Save" : "Create"}
+            {project ? t("projectDialog.save") : t("projectDialog.create")}
           </Button>
         </DialogFooter>
       </DialogContent>

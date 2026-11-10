@@ -7,11 +7,12 @@ import { HugeiconsIcon } from "@hugeicons/react"
 import {
   Add01Icon,
   ArrowDown01Icon,
-  ArrowRight01Icon,
   Archive01Icon,
   ArchiveRestoreIcon,
+  CheckListIcon,
   Delete02Icon,
   FilterIcon,
+  Folder01Icon,
   Message01Icon,
   PinIcon,
   PinOffIcon,
@@ -51,13 +52,17 @@ import {
   EmptyMedia,
   EmptyTitle,
 } from "@/components/ui/empty"
-import { Item, ItemActions, ItemContent } from "@/components/ui/item"
+import { Item, ItemContent } from "@/components/ui/item"
 import { Spinner } from "@/components/ui/spinner"
 import { toast } from "@/components/ui/toast"
+import { useI18n } from "@/components/i18n-provider"
 import type { NavigationData } from "@/lib/foundation"
+import { cn } from "@/lib/utils"
+import type { MessageKey, MessageValues } from "@/lib/i18n"
 
 type Thread = NavigationData["threads"][number]
 type Project = NavigationData["projects"][number]
+type Translate = (key: MessageKey, values?: MessageValues) => string
 
 function projectOf(thread: Thread, projects: Project[]) {
   return projects.find((project) => project.id === thread.project_id)
@@ -65,11 +70,13 @@ function projectOf(thread: Thread, projects: Project[]) {
 
 function projectLabel(
   filter: string,
-  projects: Project[]
+  projects: Project[],
+  t: Translate
 ): string {
-  if (filter === "all") return "All projects"
-  if (filter === "none") return "No project"
-  return projects.find((project) => project.id === filter)?.name ?? "All projects"
+  if (filter === "all") return t("chats.allProjects")
+  if (filter === "none") return t("chats.noProject")
+  return projects.find((project) => project.id === filter)?.name ??
+    t("chats.allProjects")
 }
 
 export function ChatsView({
@@ -82,9 +89,11 @@ export function ChatsView({
   csrfToken?: string
 }) {
   const router = useRouter()
+  const { t, tn } = useI18n()
   const [query, setQuery] = useState("")
   const [projectFilter, setProjectFilter] = useState("all")
   const [filterOpen, setFilterOpen] = useState(false)
+  const [selectMode, setSelectMode] = useState(false)
   const [selected, setSelected] = useState<Set<string>>(new Set())
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState("")
@@ -116,8 +125,16 @@ export function ChatsView({
   const allArchived =
     selectedThreads.length > 0 &&
     selectedThreads.every((thread) => thread.archived)
-  const allSelected =
-    filtered.length > 0 && filtered.every((thread) => selected.has(thread.id))
+
+  function enterSelectMode() {
+    setSelected(new Set())
+    setSelectMode(true)
+  }
+
+  function exitSelectMode() {
+    setSelectMode(false)
+    setSelected(new Set())
+  }
 
   function toggle(id: string, checked: boolean) {
     setSelected((current) => {
@@ -126,12 +143,6 @@ export function ChatsView({
       else next.delete(id)
       return next
     })
-  }
-
-  function toggleAll() {
-    setSelected(
-      allSelected ? new Set() : new Set(filtered.map((thread) => thread.id))
-    )
   }
 
   async function runBatch(
@@ -144,8 +155,9 @@ export function ChatsView({
     try {
       const responses = await Promise.all([...selected].map(work))
       if (responses.some((response) => !response.ok))
-        throw new Error("Some chats could not be updated.")
+        throw new Error(t("chats.someFailed"))
       setSelected(new Set())
+      setSelectMode(false)
       setRemoveOpen(false)
       router.refresh()
       toast.add({ title: success, type: "success" })
@@ -153,9 +165,13 @@ export function ChatsView({
       const message =
         requestError instanceof Error
           ? requestError.message
-          : "The action could not be completed."
+          : t("chats.actionNotCompleted")
       setError(message)
-      toast.add({ title: "Action failed", description: message, type: "error" })
+      toast.add({
+        title: t("chats.actionFailed"),
+        description: message,
+        type: "error",
+      })
     } finally {
       setBusy(false)
     }
@@ -183,127 +199,84 @@ export function ChatsView({
 
   return (
     <div className="detail-page">
-      <PageHeader title="Chats" parent={{ name: "Skye", href: "/chat" }}>
-        <Button
-          nativeButton={false}
-          render={<Link href="/chat" />}
-        >
-          New thread
-          <HugeiconsIcon icon={Add01Icon} data-icon="inline-end" />
-        </Button>
+      <PageHeader
+        title={t("chats.title")}
+        parent={{ name: "Skye", href: "/chat" }}
+      >
+        {threads.length > 0 && (
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={selectMode ? exitSelectMode : enterSelectMode}
+          >
+            <HugeiconsIcon icon={CheckListIcon} data-icon="inline-start" />
+            {selectMode ? t("chats.done") : t("chats.select")}
+          </Button>
+        )}
+        {!selectMode && (
+          <Button
+            nativeButton={false}
+            render={<Link href="/chat" />}
+            aria-label={t("chats.newThread")}
+          >
+            <span className="hidden sm:inline">{t("chats.newThread")}</span>
+            <HugeiconsIcon icon={Add01Icon} data-icon="inline-end" />
+          </Button>
+        )}
       </PageHeader>
       <main className="detail-content resource-page">
-        <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
-          <ResourceSearch
-            id="chats-search"
-            value={query}
-            onChange={setQuery}
-            placeholder="Search chats"
-            className="sm:max-w-sm"
-          />
-          <DropdownMenu open={filterOpen} onOpenChange={setFilterOpen}>
-            <DropdownMenuTrigger
-              render={
-                <Button
-                  variant="outline"
-                  className="w-full justify-between gap-2 sm:w-auto"
-                />
-              }
-            >
-              <span className="flex items-center gap-2">
-                <HugeiconsIcon icon={FilterIcon} />
-                {projectLabel(projectFilter, projects)}
-              </span>
-              <HugeiconsIcon
-                icon={ArrowDown01Icon}
-                className="text-muted-foreground"
-              />
-            </DropdownMenuTrigger>
-            <DropdownMenuContent align="end" className="w-56">
-              <DropdownMenuGroup>
-                <DropdownMenuRadioGroup
-                  value={projectFilter}
-                  onValueChange={(value) => {
-                    setProjectFilter(value)
-                    setFilterOpen(false)
-                  }}
-                >
-                  <DropdownMenuRadioItem value="all">
-                    All projects
-                  </DropdownMenuRadioItem>
-                  <DropdownMenuRadioItem value="none">
-                    No project
-                  </DropdownMenuRadioItem>
-                  {projects.map((project) => (
-                    <DropdownMenuRadioItem
-                      key={project.id}
-                      value={project.id}
-                    >
-                      <span aria-hidden="true">{project.emoji || "📁"}</span>
-                      {project.name}
-                    </DropdownMenuRadioItem>
-                  ))}
-                </DropdownMenuRadioGroup>
-              </DropdownMenuGroup>
-            </DropdownMenuContent>
-          </DropdownMenu>
-        </div>
-
-        {error && (
-          <Alert variant="destructive">
-            <AlertDescription>{error}</AlertDescription>
-          </Alert>
-        )}
-
-        {filtered.length > 0 && (
-          <div className="flex flex-wrap items-center gap-3">
-            <label className="flex items-center gap-2 text-sm text-muted-foreground">
-              <Checkbox
-                checked={allSelected}
-                onCheckedChange={toggleAll}
-                aria-label="Select all visible chats"
-              />
-              {selected.size > 0
-                ? `${selected.size} selected`
-                : `${filtered.length} ${filtered.length === 1 ? "chat" : "chats"}`}
-            </label>
-            {selected.size > 0 && (
-              <div className="flex min-w-0 flex-wrap items-center gap-2">
-                <div className="max-w-full overflow-x-auto">
-                  <ButtonGroup>
+        {threads.length > 0 && (
+          <div className="flex min-h-10 flex-col gap-3 sm:flex-row sm:items-center">
+            {selectMode ? (
+              <>
+                <span className="flex min-h-10 shrink-0 items-center text-sm text-muted-foreground">
+                  {tn("chats.selected", selected.size)}
+                </span>
+                <div className="flex min-h-10 min-w-0 flex-1 items-center overflow-x-auto">
+                  <ButtonGroup aria-label={tn("chats.selected", selected.size)}>
                     <Button
                       variant="outline"
                       size="sm"
-                      disabled={busy}
+                      disabled={busy || selected.size === 0}
+                      aria-label={allPinned ? t("chats.unpin") : t("chats.pin")}
                       onClick={() =>
                         void updateSelected(
                           { pinned: !allPinned },
-                          allPinned ? "Chats unpinned" : "Chats pinned"
+                          allPinned
+                            ? t("chats.unpinnedToast")
+                            : t("chats.pinnedToast")
                         )
                       }
                     >
-                      <HugeiconsIcon
-                        icon={allPinned ? PinOffIcon : PinIcon}
-                        data-icon="inline-start"
-                      />
-                      {allPinned ? "Unpin" : "Pin"}
+                      <HugeiconsIcon icon={allPinned ? PinOffIcon : PinIcon} />
+                      <span className="hidden sm:inline">
+                        {allPinned ? t("chats.unpin") : t("chats.pin")}
+                      </span>
                     </Button>
                     <Button
                       variant="outline"
                       size="sm"
-                      disabled={busy}
+                      disabled={busy || selected.size === 0}
+                      aria-label={
+                        allArchived ? t("chats.unarchive") : t("chats.archive")
+                      }
                       onClick={() =>
                         void updateSelected(
                           { archived: !allArchived },
-                          allArchived ? "Chats unarchived" : "Chats archived"
+                          allArchived
+                            ? t("chats.unarchivedToast")
+                            : t("chats.archivedToast")
                         )
                       }
                     >
                       <HugeiconsIcon
                         icon={allArchived ? ArchiveRestoreIcon : Archive01Icon}
-                        data-icon="inline-start"
                       />
-                      {allArchived ? "Unarchive" : "Archive"}
+                      <span className="hidden sm:inline">
+                        {allArchived
+                          ? t("chats.unarchive")
+                          : t("chats.archive")}
+                      </span>
                     </Button>
                     <DropdownMenu>
                       <DropdownMenuTrigger
@@ -311,11 +284,15 @@ export function ChatsView({
                           <Button
                             variant="outline"
                             size="sm"
-                            disabled={busy}
+                            disabled={busy || selected.size === 0}
+                            aria-label={t("chats.moveTo")}
                           />
                         }
                       >
-                        Move to
+                        <HugeiconsIcon icon={Folder01Icon} />
+                        <span className="hidden sm:inline">
+                          {t("chats.moveTo")}
+                        </span>
                         <HugeiconsIcon
                           icon={ArrowDown01Icon}
                           data-icon="inline-end"
@@ -327,11 +304,11 @@ export function ChatsView({
                             onClick={() =>
                               void updateSelected(
                                 { project_id: null },
-                                "Chats moved"
+                                t("chats.movedToast")
                               )
                             }
                           >
-                            No project
+                            {t("chats.noProject")}
                           </DropdownMenuItem>
                         </DropdownMenuGroup>
                         <DropdownMenuSeparator />
@@ -342,7 +319,7 @@ export function ChatsView({
                               onClick={() =>
                                 void updateSelected(
                                   { project_id: project.id },
-                                  "Chats moved"
+                                  t("chats.movedToast")
                                 )
                               }
                             >
@@ -358,29 +335,85 @@ export function ChatsView({
                     <Button
                       variant="destructive"
                       size="sm"
-                      disabled={busy}
+                      disabled={busy || selected.size === 0}
+                      aria-label={t("chats.delete")}
                       onClick={() => setRemoveOpen(true)}
                     >
-                      <HugeiconsIcon
-                        icon={Delete02Icon}
-                        data-icon="inline-start"
-                      />
-                      Delete
+                      <HugeiconsIcon icon={Delete02Icon} />
+                      <span className="hidden sm:inline">
+                        {t("chats.delete")}
+                      </span>
                     </Button>
                   </ButtonGroup>
                 </div>
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  disabled={busy}
-                  onClick={() => setSelected(new Set())}
-                >
-                  Clear
-                </Button>
                 {busy && <Spinner />}
-              </div>
+              </>
+            ) : (
+              <>
+                <ResourceSearch
+                  id="chats-search"
+                  value={query}
+                  onChange={setQuery}
+                  placeholder={t("chats.search")}
+                  className="sm:max-w-sm"
+                />
+                <DropdownMenu open={filterOpen} onOpenChange={setFilterOpen}>
+                  <DropdownMenuTrigger
+                    render={
+                      <Button
+                        variant="outline"
+                        className="h-10 w-full justify-between gap-2 sm:w-auto"
+                      />
+                    }
+                  >
+                    <span className="flex items-center gap-2">
+                      <HugeiconsIcon icon={FilterIcon} />
+                      {projectLabel(projectFilter, projects, t)}
+                    </span>
+                    <HugeiconsIcon
+                      icon={ArrowDown01Icon}
+                      className="text-muted-foreground"
+                    />
+                  </DropdownMenuTrigger>
+                  <DropdownMenuContent align="end" className="w-56">
+                    <DropdownMenuGroup>
+                      <DropdownMenuRadioGroup
+                        value={projectFilter}
+                        onValueChange={(value) => {
+                          setProjectFilter(value)
+                          setFilterOpen(false)
+                        }}
+                      >
+                        <DropdownMenuRadioItem value="all">
+                          {t("chats.allProjects")}
+                        </DropdownMenuRadioItem>
+                        <DropdownMenuRadioItem value="none">
+                          {t("chats.noProject")}
+                        </DropdownMenuRadioItem>
+                        {projects.map((project) => (
+                          <DropdownMenuRadioItem
+                            key={project.id}
+                            value={project.id}
+                          >
+                            <span aria-hidden="true">
+                              {project.emoji || "📁"}
+                            </span>
+                            {project.name}
+                          </DropdownMenuRadioItem>
+                        ))}
+                      </DropdownMenuRadioGroup>
+                    </DropdownMenuGroup>
+                  </DropdownMenuContent>
+                </DropdownMenu>
+              </>
             )}
           </div>
+        )}
+
+        {error && (
+          <Alert variant="destructive">
+            <AlertDescription>{error}</AlertDescription>
+          </Alert>
         )}
 
         {threads.length === 0 ? (
@@ -389,14 +422,14 @@ export function ChatsView({
               <EmptyMedia variant="icon">
                 <HugeiconsIcon icon={Message01Icon} />
               </EmptyMedia>
-              <EmptyTitle>No chats yet</EmptyTitle>
+              <EmptyTitle>{t("chats.noChats")}</EmptyTitle>
               <EmptyDescription>
-                Start a conversation and it will appear here.
+                {t("chats.noChatsDescription")}
               </EmptyDescription>
             </EmptyHeader>
             <EmptyContent>
               <Button nativeButton={false} render={<Link href="/chat" />}>
-                Start a chat
+                {t("chats.startChat")}
                 <HugeiconsIcon icon={Add01Icon} data-icon="inline-end" />
               </Button>
             </EmptyContent>
@@ -407,14 +440,14 @@ export function ChatsView({
               <EmptyMedia variant="icon">
                 <HugeiconsIcon icon={Search01Icon} />
               </EmptyMedia>
-              <EmptyTitle>No chats found</EmptyTitle>
+              <EmptyTitle>{t("chats.noFound")}</EmptyTitle>
               <EmptyDescription>
-                Try a different search or project.
+                {t("chats.tryDifferent")}
               </EmptyDescription>
             </EmptyHeader>
             <EmptyContent>
               <Button variant="outline" onClick={clearFilters}>
-                Clear filters
+                {t("chats.clearFilters")}
               </Button>
             </EmptyContent>
           </Empty>
@@ -426,62 +459,79 @@ export function ChatsView({
             >
               {filtered.map((thread) => {
                 const project = projectOf(thread, projects)
+                const picked = selected.has(thread.id)
                 return (
                   <Item
                     key={thread.id}
                     role="listitem"
-                    className="flex-nowrap items-start rounded-none border-0 px-4 py-4 sm:px-5"
+                    className="relative flex-nowrap items-start rounded-none border-0 px-4 py-4 transition-colors hover:bg-muted/25 sm:px-5"
                   >
-                    <Checkbox
-                      className="mt-1"
-                      checked={selected.has(thread.id)}
-                      onCheckedChange={(checked) =>
-                        toggle(thread.id, Boolean(checked))
+                    <button
+                      type="button"
+                      aria-label={
+                        selectMode
+                          ? t("chats.selectAria", { title: thread.title })
+                          : t("chats.open", { title: thread.title })
                       }
-                      aria-label={`Select ${thread.title}`}
+                      aria-pressed={selectMode ? picked : undefined}
+                      className="absolute inset-0 z-0 rounded-none outline-none focus-visible:ring-3 focus-visible:ring-ring/50 focus-visible:ring-inset"
+                      onClick={() =>
+                        selectMode
+                          ? toggle(thread.id, !picked)
+                          : router.push(`/chat/${thread.id}`)
+                      }
                     />
-                    <ItemContent className="gap-2">
+                    <div
+                      className={cn(
+                        "relative z-10 mt-1 shrink-0 overflow-hidden transition-[width,margin,opacity,transform] duration-200 ease-out",
+                        selectMode
+                          ? "w-4 translate-x-0 opacity-100"
+                          : "-me-3.5 w-0 -translate-x-1 opacity-0"
+                      )}
+                      aria-hidden={!selectMode}
+                    >
+                      <Checkbox
+                        checked={picked}
+                        disabled={!selectMode}
+                        tabIndex={selectMode ? 0 : -1}
+                        onCheckedChange={(checked) =>
+                          toggle(thread.id, Boolean(checked))
+                        }
+                        aria-label={t("chats.selectAria", {
+                          title: thread.title,
+                        })}
+                      />
+                    </div>
+                    <ItemContent className="pointer-events-none relative z-10 gap-2">
                       <div className="flex min-w-0 items-center gap-2">
-                        <Link
-                          href={`/chat/${thread.id}`}
-                          className="truncate text-sm font-medium underline-offset-4 hover:underline"
-                        >
+                        <span className="truncate text-sm font-medium">
                           {thread.title}
-                        </Link>
+                        </span>
                         {thread.pinned && (
                           <HugeiconsIcon
                             icon={PinIcon}
                             className="size-3.5 shrink-0 text-muted-foreground"
-                            aria-label="Pinned"
+                            aria-label={t("chats.pinned")}
                           />
                         )}
                         {thread.archived && (
-                          <Badge variant="outline">Archived</Badge>
+                          <Badge variant="outline">
+                            {t("common.archived")}
+                          </Badge>
                         )}
                       </div>
                       <p className="line-clamp-2 text-sm text-muted-foreground">
-                        {thread.preview || "No messages yet."}
+                        {thread.preview || t("chats.noMessages")}
                       </p>
                       <div className="flex flex-wrap items-center gap-2">
                         <Badge variant="secondary" className="font-normal">
                           <span aria-hidden="true">
                             {project?.emoji || "📁"}
                           </span>
-                          {project?.name ?? "No project"}
+                          {project?.name ?? t("chats.noProject")}
                         </Badge>
                       </div>
                     </ItemContent>
-                    <ItemActions className="self-start">
-                      <Button
-                        variant="ghost"
-                        size="icon-sm"
-                        nativeButton={false}
-                        render={<Link href={`/chat/${thread.id}`} />}
-                        aria-label={`Open ${thread.title}`}
-                      >
-                        <HugeiconsIcon icon={ArrowRight01Icon} />
-                      </Button>
-                    </ItemActions>
                   </Item>
                 )
               })}
@@ -499,15 +549,16 @@ export function ChatsView({
         <AlertDialogContent>
           <AlertDialogHeader>
             <AlertDialogTitle>
-              Delete {selected.size} {selected.size === 1 ? "chat" : "chats"}?
+              {tn("chats.deleteTitle", selected.size)}
             </AlertDialogTitle>
             <AlertDialogDescription>
-              Their messages, runs and activity are removed. This cannot be
-              undone.
+              {t("chats.deleteDescription")}
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
-            <AlertDialogCancel disabled={busy}>Cancel</AlertDialogCancel>
+            <AlertDialogCancel disabled={busy}>
+              {t("common.cancel")}
+            </AlertDialogCancel>
             <Button
               variant="destructive"
               disabled={busy}
@@ -518,12 +569,12 @@ export function ChatsView({
                       method: "DELETE",
                       headers: { "X-CSRF-Token": csrfToken ?? "" },
                     }),
-                  "Chats deleted"
+                  t("chats.deletedToast")
                 )
               }
             >
               {busy && <Spinner data-icon="inline-start" />}
-              Delete
+              {t("chats.deleteConfirm")}
             </Button>
           </AlertDialogFooter>
         </AlertDialogContent>

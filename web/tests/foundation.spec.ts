@@ -4,7 +4,8 @@ import AxeBuilder from "@axe-core/playwright"
 test("draft is never sent and survives the feature dialog", async ({
   page,
 }) => {
-  await page.goto("/chat")
+  await page.goto("/dev/states/ready")
+  await page.locator('[data-hydrated="true"]').waitFor()
   const input = page.getByRole("textbox", { name: "Message Skye" })
   await input.fill("A private thought")
   await page.getByRole("button", { name: "Add files", exact: true }).click()
@@ -25,6 +26,7 @@ test("draft is never sent and survives the feature dialog", async ({
 
 test("search is keyboard reachable and routes to memory", async ({ page }) => {
   await page.goto("/chat")
+  await page.locator('[data-hydrated="true"]').waitFor()
   await page.keyboard.press("Control+k")
   await expect(page.getByRole("dialog", { name: "Search" })).toBeVisible()
   await page.getByRole("combobox").fill("Memory")
@@ -101,23 +103,19 @@ test("mobile navigation closes on destination and has a visible close path", asy
   await expect(page.getByRole("dialog")).toHaveCount(0)
 })
 
-test("library action sits beside search and empty states name themselves", async ({
+test("library action is in the header and empty states name themselves", async ({
   page,
 }) => {
   await page.setViewportSize({ width: 1440, height: 900 })
   await page.goto("/library/skills")
-  const search = await page
-    .getByRole("textbox", { name: "Search skills" })
-    .boundingBox()
-  const action = await page
-    .getByRole("button", { name: "Upload a skill" })
-    .boundingBox()
-  expect(search).not.toBeNull()
-  expect(action).not.toBeNull()
-  expect(action!.x).toBeGreaterThan(search!.x + search!.width)
-  expect(
-    Math.abs(action!.y + action!.height / 2 - (search!.y + search!.height / 2))
-  ).toBeLessThan(2)
+  await expect(
+    page.getByRole("textbox", { name: "Search skills" })
+  ).toBeVisible()
+  await expect(
+    page
+      .locator("header")
+      .getByRole("button", { name: "Upload skill", exact: true })
+  ).toBeVisible()
   await expect(page.getByText("No skills yet", { exact: true })).toBeVisible()
   await expect(page.locator('[data-slot="empty-icon"] svg')).toBeVisible()
 })
