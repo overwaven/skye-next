@@ -52,7 +52,6 @@ from .group_context import GroupContextService
 from .growth import ACTIVATION_BONUS, GrowthService
 from .media_groups import MediaGroupService
 from .memory import MemoryService
-from .model_catalog import PickerPrices
 from .models import (
     AccessEffect,
     AccessEntry,
@@ -195,7 +194,6 @@ class TelegramApp:
         events: WebEventStore | None = None,
     ) -> None:
         self.config = config
-        self.picker_prices = PickerPrices()
         self.bot = bot
         self.database = database
         self.access = access
@@ -428,7 +426,6 @@ class TelegramApp:
             if kind == "image"
             else text_model or self.config.skye_default_model
         )
-        prices = await self.picker_prices.labels(models, images=kind == "image")
         rows: list[list[InlineKeyboardButton]] = [
             [
                 InlineKeyboardButton(
@@ -448,8 +445,8 @@ class TelegramApp:
                 )
             ],
         ]
-        for model, price in zip(models, prices, strict=True):
-            label = f"{'✓ ' if model.id == selected else ''}{model.name} · {model.tier} · {price}"
+        for model in models:
+            label = f"{'✓ ' if model.id == selected else ''}{model.name} · {model.tier}"
             rows.append(
                 [
                     InlineKeyboardButton(

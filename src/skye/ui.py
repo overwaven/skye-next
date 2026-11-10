@@ -24,6 +24,8 @@ class Icon(StrEnum):
     ANTHROPIC = "5436067147937791741"
     DEEPSEEK = "5436177227949584530"
     XAI = "5435883104294186097"
+    META = "5447384412532553157"
+    GEMINI = "5447461614569696300"
     CLOSE = "5220160224299623455"
     EDIT = "5219674923059947621"
     SHIELD = "5219823516043485651"
@@ -63,6 +65,8 @@ MODEL_PROVIDER_ICONS: dict[str, Icon] = {
     "anthropic": Icon.ANTHROPIC,
     "deepseek": Icon.DEEPSEEK,
     "x-ai": Icon.XAI,
+    "meta": Icon.META,
+    "google": Icon.GEMINI,
 }
 
 
