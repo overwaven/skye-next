@@ -54,6 +54,8 @@ async function forward(request: NextRequest) {
   for (const name of [
     "content-type",
     "content-disposition",
+    "content-security-policy",
+    "cross-origin-resource-policy",
     "accept-ranges",
     "content-range",
   ]) {

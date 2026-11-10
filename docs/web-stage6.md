@@ -90,7 +90,7 @@ Post-deployment SQLite `quick_check` passed and both containers reported running
 restarts. Anonymous resource access returns 401; authenticated live UI was verified with
 the owner's account.
 
-Local verification: 425 Python regressions and 75 browser checks across Chromium, Firefox
+Local verification: 426 Python regressions and 78 browser checks across Chromium, Firefox
 and WebKit, including chat selection/layout stability, tool evidence, Memory/Skills/
 Connectors CRUD, project deletion and English/Russian locale persistence. The connected
 browser checks use an isolated local database under `web/test-results/`; they are not live

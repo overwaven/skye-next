@@ -13,6 +13,7 @@ from joserfc.jwk import RSAKey
 from skye.access import AccessService
 from skye.config import HOSTED_MODEL, Settings
 from skye.db import Database
+from skye.library import MediaLibrary
 from skye.models import Scope
 from skye.telegram_projects import TelegramProjectService
 from skye.threads import ThreadStore
@@ -392,3 +393,31 @@ async def test_thread_pin_and_project_delete_keep_threads(database, aiohttp_clie
         item["project_id"] != project_id for item in remaining
     )
     assert (await client.delete(f"/api/v1/projects/{project_id}", headers=alice)).status == 404
+
+
+async def test_any_uploaded_file_type_is_download_only(database, aiohttp_client, tmp_path):
+    client = await aiohttp_client(
+        application(database, files=MediaLibrary(tmp_path / "media"))
+    )
+    alice = await headers(database)
+    payload = b"<!doctype html><script>alert(1)</script>"
+    uploaded = await client.post(
+        "/api/v1/media",
+        headers=alice
+        | {
+            "Content-Type": "text/html; charset=utf-8",
+            "X-Skye-File-Name": "page.html",
+        },
+        data=payload,
+    )
+    assert uploaded.status == 201
+    record = await uploaded.json()
+    assert record["name"] == "page.html"
+    assert record["media_type"] == "text/html"
+    assert record["is_image"] is False
+
+    download = await client.get(f"/api/v1/media/{record['id']}", headers=alice)
+    assert download.status == 200
+    assert download.headers["Content-Disposition"].startswith("attachment;")
+    assert download.headers["Content-Security-Policy"] == "default-src 'none'; sandbox"
+    assert await download.read() == payload

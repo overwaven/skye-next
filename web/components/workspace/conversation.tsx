@@ -25,6 +25,7 @@ import { MediaPicker } from "@/components/workspace/media-picker"
 import { PreviewableAttachment } from "@/components/workspace/attachment-preview"
 import { CreateProjectDialog } from "@/components/workspace/create-project-dialog"
 import { VoiceRecorder } from "@/components/workspace/voice-recorder"
+import { uploadMediaFile } from "@/components/workspace/media-upload"
 import { Button } from "@/components/ui/button"
 import { Bubble, BubbleContent } from "@/components/ui/bubble"
 import { Message, MessageContent, MessageHeader } from "@/components/ui/message"
@@ -74,6 +75,7 @@ import {
   TraceTitle,
 } from "@/components/ui/trace"
 import { Spinner } from "@/components/ui/spinner"
+import { toast } from "@/components/ui/toast"
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -466,6 +468,7 @@ export function Conversation({
   const [failure, setFailure] = React.useState<APIError | null>(null)
   const [lastSend, setLastSend] = React.useState<PendingSend | null>(null)
   const [selected, setSelected] = React.useState<MediaRecord[]>([])
+  const [attaching, setAttaching] = React.useState(0)
   const [transcripts, setTranscripts] = React.useState<Record<string, string>>(
     {}
   )
@@ -652,6 +655,58 @@ export function Conversation({
     }
   }
 
+  async function attachFiles(files: File[]) {
+    if (files.length === 0) return
+    if (!csrfToken) {
+      setDetail(t("chat.previewFileUpload"))
+      return
+    }
+    setAttaching((current) => current + 1)
+    try {
+      const uploaded: MediaRecord[] = []
+      let failure = ""
+      for (const file of files) {
+        try {
+          uploaded.push(await uploadMediaFile(file, csrfToken))
+        } catch (error) {
+          if ((error as Error).name !== "AbortError" && !failure)
+            failure = (error as Error).message
+        }
+      }
+      if (uploaded.length > 0) {
+        setSelected((current) => {
+          const known = new Set(current.map((item) => item.id))
+          return [...current, ...uploaded.filter((item) => !known.has(item.id))]
+        })
+        setNotice("")
+      }
+      if (failure)
+        toast.add({
+          title: t("chat.pasteFailed"),
+          description: failure,
+          type: "error",
+        })
+    } finally {
+      setAttaching((current) => Math.max(0, current - 1))
+    }
+  }
+
+  function pasteFiles(event: React.ClipboardEvent<HTMLFormElement>) {
+    const clipboard = event.clipboardData
+    if (!clipboard) return
+    const direct = Array.from(clipboard.files ?? [])
+    const files =
+      direct.length > 0
+        ? direct
+        : Array.from(clipboard.items ?? [])
+            .filter((item) => item.kind === "file")
+            .map((item) => item.getAsFile())
+            .filter((file): file is File => Boolean(file))
+    if (files.length === 0) return
+    event.preventDefault()
+    void attachFiles(files)
+  }
+
   async function send(
     text: string,
     files: MediaRecord[],
@@ -725,7 +780,8 @@ export function Conversation({
 
   async function submit() {
     const text = draft.trim()
-    if (!text || sending || (run && ACTIVE.has(run.state))) return
+    if (!text || sending || attaching > 0 || (run && ACTIVE.has(run.state)))
+      return
     if (!connected) {
       setNotice(t("chat.notSent"))
       return
@@ -1105,11 +1161,21 @@ export function Conversation({
               ))}
             </AttachmentGroup>
           )}
+          {attaching > 0 && (
+            <p
+              role="status"
+              className="flex items-center gap-2 px-1 text-sm text-muted-foreground"
+            >
+              <Spinner />
+              {t("chat.attaching")}
+            </p>
+          )}
           <form
             onSubmit={(event) => {
               event.preventDefault()
               void submit()
             }}
+            onPaste={pasteFiles}
           >
             <Field>
               <FieldLabel htmlFor={id} className="sr-only">
@@ -1203,7 +1269,7 @@ export function Conversation({
                       type="submit"
                       className="ms-auto"
                       aria-label={t("chat.send")}
-                      disabled={sending || !draft.trim()}
+                      disabled={sending || attaching > 0 || !draft.trim()}
                     >
                       {sending ? (
                         <Spinner />

@@ -50,6 +50,7 @@ import { MediaPreview } from "@/components/workspace/media-preview"
 import { Separator } from "@/components/ui/separator"
 import { cn } from "@/lib/utils"
 import { useI18n } from "@/components/i18n-provider"
+import { attachmentName, uploadMediaFile } from "@/components/workspace/media-upload"
 
 type Upload = {
   key: string
@@ -134,45 +135,33 @@ export function MediaPicker({
   }, [open])
 
   function upload(file: File) {
-    const key = `${file.name}:${file.size}:${Date.now()}`
-    setUploading((current) => [
-      ...current,
-      { key, name: file.name, progress: 0 },
-    ])
+    const name = attachmentName(file)
+    const key = `${name}:${file.size}:${Date.now()}`
+    setUploading((current) => [...current, { key, name, progress: 0 }])
     setError("")
-    const request = new XMLHttpRequest()
-    requests.current.set(key, request)
-    request.open("POST", "/api/v1/media")
-    request.setRequestHeader("X-CSRF-Token", csrfToken)
-    request.setRequestHeader("X-Skye-File-Name", file.name)
-    request.setRequestHeader(
-      "Content-Type",
-      file.type || "application/octet-stream"
+    void uploadMediaFile(
+      file,
+      csrfToken,
+      (progress) =>
+        setUploading((current) =>
+          current.map((item) =>
+            item.key === key ? { ...item, progress } : item
+          )
+        ),
+      (request) => requests.current.set(key, request)
     )
-    request.upload.onprogress = (event) => {
-      if (!event.lengthComputable) return
-      const progress = Math.round((event.loaded / event.total) * 100)
-      setUploading((current) =>
-        current.map((item) => (item.key === key ? { ...item, progress } : item))
-      )
-    }
-    request.onload = () => {
-      requests.current.delete(key)
-      setUploading((current) => current.filter((item) => item.key !== key))
-      if (request.status === 201) {
-        const media = JSON.parse(request.responseText) as MediaRecord
+      .then((media) => {
+        requests.current.delete(key)
         setItems((current) => [media, ...current])
         onToggle(media)
-      } else {
-        setError(t("media.couldNotAttach"))
-      }
-    }
-    request.onerror = () => {
-      requests.current.delete(key)
-      setUploading((current) => current.filter((item) => item.key !== key))
-      setError(t("media.uploadInterrupted"))
-    }
-    request.send(file)
+      })
+      .catch((error: Error) => {
+        if (error.name !== "AbortError") setError(error.message)
+      })
+      .finally(() => {
+        requests.current.delete(key)
+        setUploading((current) => current.filter((item) => item.key !== key))
+      })
   }
 
   async function remove(media: MediaRecord) {

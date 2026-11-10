@@ -9,7 +9,7 @@ import time
 from collections import OrderedDict
 from collections.abc import Awaitable, Callable
 from typing import Any, cast
-from urllib.parse import urlsplit
+from urllib.parse import unquote, urlsplit
 from uuid import uuid4
 
 import structlog
@@ -584,7 +584,9 @@ def create_app(
         data = await request.read()
         if not data or len(data) > config.skye_max_attachment_bytes:
             raise ValueError("The file is empty or too large")
-        name = request.headers.get("X-Skye-File-Name", "File")
+        name = unquote(
+            request.headers.get("X-Skye-File-Name", "File"), errors="replace"
+        )
         ref = await media.save(user_id, name, request.headers.get("Content-Type", ""), data)
         return web.json_response(ref.record.model_dump(), status=201)
 

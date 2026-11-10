@@ -14,24 +14,10 @@ from .library import MediaLibrary, sniff_image
 from .models import Scope
 from .web_contracts import MediaRecord
 
+# Only verified raster images are served inline. Every other uploaded type is
+# download-only, so arbitrary files (including HTML, SVG and scripts) can never
+# execute in the application origin.
 SAFE_IMAGE_TYPES = {"image/png", "image/jpeg", "image/webp", "image/gif"}
-BLOCKED_TYPES = {
-    "image/svg+xml",
-    "text/html",
-    "application/xhtml+xml",
-    "application/javascript",
-    "text/javascript",
-}
-ALLOWED_PREFIXES = ("image/", "audio/", "video/", "text/")
-ALLOWED_TYPES = {
-    "application/pdf",
-    "application/json",
-    "application/zip",
-    "application/octet-stream",
-    "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-    "application/vnd.openxmlformats-officedocument.presentationml.presentation",
-}
 
 
 @dataclass(frozen=True, slots=True)
@@ -58,14 +44,6 @@ def media_type(name: str, declared: str = "") -> str:
     return kind[:128]
 
 
-def allowed(kind: str) -> bool:
-    if kind in BLOCKED_TYPES:
-        return False
-    if kind.startswith("image/svg"):
-        return False
-    return kind in ALLOWED_TYPES or kind.startswith(ALLOWED_PREFIXES)
-
-
 class WebMediaStore:
     def __init__(self, database: Database, files: MediaLibrary) -> None:
         self.database = database
@@ -79,8 +57,6 @@ class WebMediaStore:
         cleaned = clean_name(name)
         detected = sniff_image(data)
         kind = detected or media_type(cleaned, declared_type)
-        if not allowed(kind):
-            raise ValueError("This file type cannot be attached.")
         scope = Scope("user", user_id)
         entry = self.files.save(scope, data, name=cleaned, mime=kind)
         media_id = uuid4().hex

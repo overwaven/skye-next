@@ -726,6 +726,8 @@ Dependencies: Stage 4.
 
 - [x] Authenticated bounded uploads, opaque attachment IDs, file metadata/references and
       library picker using existing MediaLibrary and image/tool source rules.
+- [x] Clipboard paste (Ctrl/Cmd+V or the native context menu) uploads arbitrary files
+      directly into the composer; no separate paste button.
 - [x] Previews/downloads, generated-image/file deliveries and citations; isolate unsafe content.
 - [x] Recording with permission/format detection; Stop transcribes directly into the composer,
       reports empty/failure with a toast, and keeps no audio attachment.
@@ -735,11 +737,12 @@ Dependencies: Stage 4.
 
 Implementation: uploads are opaque media ids over the per-scope `MediaLibrary`; the picker
 lists both web uploads and Telegram-saved files. Downloads are owner-scoped, images are
-inline with `nosniff` and a sandbox CSP, everything else is an attachment; HTML/SVG/script
-types are rejected. Generated pictures and files are stored back and rendered in the same
+inline with `nosniff` and a sandbox CSP, everything else is a download-only attachment;
+arbitrary uploaded types (including HTML/SVG/script) are never rendered in-origin. Generated pictures and files are stored back and rendered in the same
 thread. Recording uses `MediaRecorder` and a bounded transcription endpoint; the transcript
 is inserted into the composer, empty or failed recordings use a toast, and the temporary
-audio is deleted. Audio files remain attachable through the library. Transcription is not
+audio is deleted. Audio files remain attachable through the library. Clipboard paste uploads any file type
+through the same bounded media endpoint. Transcription is not
 separately charged in this release (25 MB / 10 per minute per account); this policy is
 explicit and bounded until a price exists. Expired library bytes stay visible as expired
 rather than guessed.
@@ -771,7 +774,7 @@ remains disabled until the operator configures `SKYE_CONNECTOR_ENCRYPTION_KEY`. 
 VkusVill custom MCP remains disabled because its endpoint hangs. See
 `docs/web-stage6.md` and `docs/web-stage6-e2e.json`.
 
-Evidence: 425 Python regressions and 75 browser tests across Chromium, Firefox and WebKit,
+Evidence: 426 Python regressions and 78 browser tests across Chromium, Firefox and WebKit,
 with contracts, lint, typecheck and the production build passing. The one-account
 production deploy passed migration, SQLite `quick_check` and restart checks. Live connector
 use/revocation, real-provider cross-channel acceptance and a second real account remain
