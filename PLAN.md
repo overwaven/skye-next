@@ -727,8 +727,9 @@ Dependencies: Stage 4.
 - [x] Authenticated bounded uploads, opaque attachment IDs, file metadata/references and
       library picker using existing MediaLibrary and image/tool source rules.
 - [x] Previews/downloads, generated-image/file deliveries and citations; isolate unsafe content.
-- [x] Recording with permission/format detection, transcription review and playback/transcripts;
-      server audio endpoints reuse services and explicit metering policy.
+- [x] Recording with permission/format detection; Stop transcribes directly into the composer,
+      reports empty/failure with a toast, and keeps no audio attachment.
+      Server audio endpoints reuse services and explicit metering policy.
 - [x] Handle file limits/eviction/expiry, upload cancellation/retry, duplicate names,
       unsupported media, microphone denial and slow networks without losing drafts.
 
@@ -736,13 +737,15 @@ Implementation: uploads are opaque media ids over the per-scope `MediaLibrary`; 
 lists both web uploads and Telegram-saved files. Downloads are owner-scoped, images are
 inline with `nosniff` and a sandbox CSP, everything else is an attachment; HTML/SVG/script
 types are rejected. Generated pictures and files are stored back and rendered in the same
-thread. Recording uses `MediaRecorder`, a bounded transcription endpoint, an editable
-review and local playback before attach. Transcription is not separately charged in this
-release (25 MB / 10 per minute per account); this policy is explicit and bounded until a
-price exists. Expired library bytes stay visible as expired rather than guessed.
+thread. Recording uses `MediaRecorder` and a bounded transcription endpoint; the transcript
+is inserted into the composer, empty or failed recordings use a toast, and the temporary
+audio is deleted. Audio files remain attachable through the library. Transcription is not
+separately charged in this release (25 MB / 10 per minute per account); this policy is
+explicit and bounded until a price exists. Expired library bytes stay visible as expired
+rather than guessed.
 
 **Exit:** a Telegram photo can be selected/edited on web and the result reused in the
-same account; a web document/voice message works in the shared thread; expired bytes
+same account; a web document and dictated text work in the shared thread; expired bytes
 are represented honestly. No scope leaks or unsafe in-origin previews.
 
 ### Stage 6 — Memory, Connectors, and Skills parity
