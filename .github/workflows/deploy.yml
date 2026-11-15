@@ -19,7 +19,7 @@ jobs:
           host: 31.97.216.135
           username: root
           key: ${{ secrets.SSH_PRIVATE_KEY }}
-          fingerprint: SHA256:inLU31SfVW/WIOT4cOWKsu970uP73WD6BN/kenpJmbM
+          fingerprint: SHA256:tup0TqtL0I5tJKIBayGoIntaZCj/RYEZflmTAoMnTvM
           command_timeout: 20m
           script: |
             set -euo pipefail
