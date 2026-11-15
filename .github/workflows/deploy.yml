@@ -1,0 +1,50 @@
+name: Deploy to production
+
+on:
+  push:
+    branches: [master]
+  workflow_dispatch:
+
+concurrency:
+  group: deploy-production
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Deploy over SSH
+        uses: appleboy/ssh-action@v1.2.2
+        with:
+          host: 31.97.216.135
+          username: root
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          fingerprint: SHA256:inLU31SfVW/WIOT4cOWKsu970uP73WD6BN/kenpJmbM
+          command_timeout: 20m
+          script: |
+            set -euo pipefail
+            if [[ ! -d /root/skye-next/.git ]]; then
+              git clone https://github.com/overwaven/skye-next.git /root/skye-next
+            fi
+            cd /root/skye-next
+            git fetch origin master
+            git checkout --force master
+            git reset --hard origin/master
+            if [[ ! -f .env ]]; then
+              echo "missing /root/skye-next/.env" >&2
+              exit 1
+            fi
+            chmod 600 .env
+            docker compose config --quiet
+            docker compose build
+            docker compose up -d --remove-orphans --wait --wait-timeout 240
+            docker compose ps
+            code=$(curl -s -o /dev/null -w '%{http_code}' \
+              -H 'Host: chat.skye-bot.com' http://127.0.0.1:8090/api/v1/session)
+            if [[ "$code" != "401" ]]; then
+              echo "auth boundary returned $code instead of 401" >&2
+              docker compose logs --tail 80 skye
+              exit 1
+            fi
+            docker image prune -f >/dev/null
+            echo "deployed $(git rev-parse --short HEAD)"

@@ -1,0 +1,34 @@
+skye-bot.com {
+    encode zstd gzip
+    header {
+        X-Content-Type-Options nosniff
+        X-Frame-Options DENY
+        Referrer-Policy strict-origin-when-cross-origin
+        -Server
+    }
+    root * /srv/site
+    @assets path /assets/* /css/* /js/* /vendor/*
+    header @assets Cache-Control "public, max-age=86400"
+    file_server
+}
+
+chat.skye-bot.com {
+    encode zstd gzip
+    header {
+        X-Content-Type-Options nosniff
+        X-Frame-Options DENY
+        Referrer-Policy no-referrer
+        -Server
+    }
+    handle /api/v1/* {
+        reverse_proxy skye:8090 {
+            header_up -X-Skye-Internal-Token
+            flush_interval -1
+        }
+    }
+    handle {
+        reverse_proxy web:3000 {
+            header_up -X-Skye-Internal-Token
+        }
+    }
+}

@@ -1,0 +1,61 @@
+services:
+  skye:
+    mem_limit: 4g
+    cpus: 2.0
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "import http.client; c=http.client.HTTPConnection('127.0.0.1',8090,timeout=5); c.request('GET','/api/v1/session',headers={'Host':'chat.skye-bot.com'}); assert c.getresponse().status == 401"
+      interval: 30s
+      timeout: 10s
+      start_period: 60s
+      retries: 3
+  web:
+    mem_limit: 1g
+    cpus: 1.0
+    depends_on:
+      skye:
+        condition: service_healthy
+    healthcheck:
+      test: [CMD, node, -e, "fetch('http://127.0.0.1:3000/').then(r=>{if(r.status>=500)process.exit(1)}).catch(()=>process.exit(1))"]
+      interval: 30s
+      timeout: 10s
+      start_period: 30s
+      retries: 3
+  caddy:
+    image: caddy:2
+    container_name: skye-caddy
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - ./site:/srv/site:ro
+      - caddy-data:/data
+      - caddy-config:/config
+    mem_limit: 256m
+    cpus: 0.5
+    security_opt:
+      - no-new-privileges:true
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+volumes:
+  caddy-data:
+    external: true
+    name: skye-next_caddy-data
+  caddy-config:
+    external: true
+    name: skye-next_caddy-config
+  skye-data:
+    external: true
+    name: skye-next_skye-data
+  skye-sandbox-work:
+    external: true
+    name: skye-sandbox-work

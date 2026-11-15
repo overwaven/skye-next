@@ -1,4 +1,4 @@
-name: skye-next
+name: skye-production
 
 services:
   skye:
@@ -21,7 +21,7 @@ services:
       SKYE_WEB_ENABLED: "true"
       SKYE_WEB_HOST: "0.0.0.0"
       SKYE_WEB_PORT: "8090"
-      SKYE_OIDC_CALLBACK_PATH: "/auth/callback"
+      SKYE_OIDC_CALLBACK_PATH: "/api/v1/auth/callback"
       SKYE_OIDC_CLIENT_ID: "${TELEGRAM_LOGIN_CLIENT_ID}"
       SKYE_OIDC_CLIENT_SECRET: "${TELEGRAM_LOGIN_CLIENT_SECRET}"
       SKYE_WEB_INTERNAL_TOKEN: "${SKYE_WEB_INTERNAL_TOKEN}"
