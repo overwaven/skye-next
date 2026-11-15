@@ -91,6 +91,14 @@ class Session:
     csrf: str
 
 
+class LoginRejected(Exception):
+    """A refused login, carrying a short reason that is safe to log."""
+
+    def __init__(self, reason: str, message: str) -> None:
+        super().__init__(message)
+        self.reason = reason
+
+
 class OIDCClient:
     """Pinned endpoints; bounded JWKS cache with one refresh on rotation."""
 
@@ -189,15 +197,21 @@ class AuthStore:
 
     async def link(self, identity: Identity) -> int:
         async with self.database.transaction() as conn:
+            # An existing account is any Telegram user Skye has already seen:
+            # every message records its sender, while user_settings and projects
+            # only exist once a person changed a setting or made a project.
             known = await (
                 await conn.execute(
+                    "SELECT 1 FROM known_users WHERE user_id=? UNION ALL "
                     "SELECT 1 FROM user_settings WHERE user_id=? UNION ALL "
                     "SELECT 1 FROM telegram_projects WHERE user_id=? LIMIT 1",
-                    (identity.user_id, identity.user_id),
+                    (identity.user_id, identity.user_id, identity.user_id),
                 )
             ).fetchone()
             if known is None:
-                raise PermissionError("Start Skye in Telegram before signing in here")
+                raise LoginRejected(
+                    "unknown_account", "Start Skye in Telegram before signing in here"
+                )
             existing = await (
                 await conn.execute(
                     "SELECT subject,user_id FROM web_identities WHERE issuer=? "
@@ -209,7 +223,7 @@ class AuthStore:
                 row["subject"] != identity.subject or row["user_id"] != identity.user_id
                 for row in existing
             ):
-                raise PermissionError("Account identity does not match")
+                raise LoginRejected("identity_conflict", "Account identity does not match")
             await conn.execute(
                 "INSERT OR IGNORE INTO web_identities VALUES(?,?,?)",
                 (ISSUER, identity.subject, identity.user_id),

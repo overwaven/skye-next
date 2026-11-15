@@ -38,6 +38,7 @@ from .web_auth import (
     LOGIN_COOKIE,
     SESSION_COOKIE,
     AuthStore,
+    LoginRejected,
     OIDCClient,
     Session,
 )
@@ -288,16 +289,20 @@ def create_app(
                 raise ValueError("Cancelled login")
             stage = "token_exchange"
             identity = await provider.exchange(request.query["code"], verifier, nonce)
-            stage = "account_link"
+            stage = "account_check"
             if await access.banned(identity.user_id):
-                raise PermissionError("Account unavailable")
+                raise LoginRejected("banned", "Account unavailable")
+            stage = "account_link"
             owner = await auth.link(identity)
             stage = "session_issue"
             token = await auth.issue(owner, request.cookies.get(SESSION_COOKIE, ""))
         except Exception as error:
-            # Safe stage/type only: no query, token, claim, account ID or provider body.
+            # Safe stage/reason/type only: no query, token, claim, account ID or provider body.
             structlog.get_logger().warning(
-                "oidc_callback_failed", stage=stage, error=type(error).__name__
+                "oidc_callback_failed",
+                stage=stage,
+                error=type(error).__name__,
+                reason=getattr(error, "reason", type(error).__name__),
             )
             response = web.Response(status=302, headers={"Location": "/login?error=verification"})
             response.del_cookie(LOGIN_COOKIE, path="/", secure=True, httponly=True, samesite="Lax")

@@ -24,6 +24,7 @@ from skye.web_auth import (
     SESSION_COOKIE,
     AuthStore,
     Identity,
+    LoginRejected,
     OIDCClient,
     digest,
     verify_identity,
@@ -173,12 +174,18 @@ async def test_durable_oidc_binding_single_use_expiry_and_identity_mismatch(data
     with pytest.raises(ValueError):
         await store.consume(state, binding)
     assert await store.link(Identity("subject-not-user-id", 1)) == 1
-    with pytest.raises(PermissionError):
+    with pytest.raises(LoginRejected) as reused_user:
         await store.link(Identity("subject-not-user-id", 2))
-    with pytest.raises(PermissionError):
+    assert reused_user.value.reason == "identity_conflict"
+    with pytest.raises(LoginRejected) as reused_subject:
         await store.link(Identity("other-subject", 1))
-    with pytest.raises(PermissionError):
+    assert reused_subject.value.reason == "identity_conflict"
+    with pytest.raises(LoginRejected) as unknown:
         await store.link(Identity("unknown", 10000))
+    assert unknown.value.reason == "unknown_account"
+    # A person the bot has only seen posting in a chat still owns an account.
+    await database.remember_user(3, "third_person", "Third Person")
+    assert await store.link(Identity("third-subject", 3)) == 3
 
 
 async def test_callback_verifies_state_sets_secure_cookie_and_handles_provider_failure(
