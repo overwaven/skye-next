@@ -10,6 +10,9 @@ const nextConfig: NextConfig = {
   // The production image only needs the traced standalone server, not the
   // builder's full node_modules tree.
   output: "standalone",
+  experimental: {
+    agentUpgrade: "security",
+  },
   async headers() {
     return [
       {
